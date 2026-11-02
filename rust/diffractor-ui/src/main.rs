@@ -308,6 +308,7 @@ struct Browser {
     zoom: Zoom,
     source_extent: Option<egui::Vec2>,
     last_viewport: egui::Vec2,
+    zoom_wheel_remainder: f32,
     full_image_requested: bool,
     metadata: Option<Metadata>,
     status: Status,
@@ -590,6 +591,7 @@ impl Browser {
             zoom: Zoom::default(),
             source_extent: None,
             last_viewport: egui::Vec2::ZERO,
+            zoom_wheel_remainder: 0.0,
             full_image_requested: false,
             metadata: None,
             status: Status::Empty,
@@ -794,6 +796,7 @@ impl Browser {
         }
         self.stop_playback();
         self.zoom.fit();
+        self.zoom_wheel_remainder = 0.0;
         self.source_extent = None;
         self.full_image_requested = false;
         self.image_generation += 1;
@@ -1697,14 +1700,21 @@ impl eframe::App for Browser {
                         let (scroll, control, pointer) = ui.input(|i| {
                             (i.smooth_scroll_delta.y, i.modifiers.ctrl, i.pointer.hover_pos())
                         });
-                        if control && scroll.abs() >= 0.01 {
+                        // The original Items contract reserves Ctrl+wheel at
+                        // Fit for thumbnail sizing; only zoom mode consumes it.
+                        if control && self.zoom.is_magnified(source, viewport.size()) {
+                            self.zoom_wheel_remainder =
+                                (self.zoom_wheel_remainder + scroll).clamp(-960.0, 960.0);
                             let anchor = pointer.unwrap_or(viewport.center()) - viewport.min;
-                            self.zoom.step(
-                                if scroll > 0.0 { 1 } else { -1 },
-                                source,
-                                viewport.size(),
-                                anchor,
-                            );
+                            let mut steps = 0;
+                            while self.zoom_wheel_remainder.abs() >= 60.0 && steps < 6 {
+                                let direction = if self.zoom_wheel_remainder > 0.0 { 1 } else { -1 };
+                                self.zoom.step(direction, source, viewport.size(), anchor);
+                                self.zoom_wheel_remainder -= direction as f32 * 60.0;
+                                steps += 1;
+                            }
+                        } else {
+                            self.zoom_wheel_remainder = 0.0;
                         }
                     }
                     if response.dragged() {
