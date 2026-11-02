@@ -1521,7 +1521,7 @@ static void should_report_incomplete_collection_discovery()
 	std::atomic_int scan_version = 1;
 	const df::cancel_token canceled(scan_version);
 	const df::cancel_token current(scan_version);
-	index.index_folders(canceled);
+	assert_equal(false, index.index_folders(canceled), "canceled walk reports incomplete");
 	index.scan_uncached(test_token);
 
 	assert_equal(true, index.is_init_complete(), "workers may start after an incomplete discovery");
@@ -1535,14 +1535,20 @@ static void should_report_incomplete_collection_discovery()
 	index_state paused(as, locations);
 	paused.cache_load_complete();
 	paused.index_roots(roots);
-	paused.index_folders(test_token, false);
+	assert_equal(false, paused.index_folders(test_token, false), "skipped walk reports incomplete");
 	assert_equal(true, paused.is_init_complete(), "skipped collection discovery releases on-demand workers");
 	assert_equal(0_z, paused.all_indexed_items().size(), "disabled discovery does not enumerate collection files");
 	paused.queue_update_presence(df::item_set({outside}));
 	assert_equal(static_cast<int>(item_presence::unknown), static_cast<int>(outside->presence()),
 	             "skipped discovery does not claim fresh absence evidence");
-	paused.index_folders(test_token);
+	assert_equal(true, paused.index_folders(test_token), "complete walk reports success");
 	assert_equal(1_z, paused.all_indexed_items().size(), "normal discovery still enumerates the collection");
+
+	index_state missing(as, locations);
+	df::index_roots missing_roots;
+	missing_roots.folders.emplace(root.combine("does-not-exist").combine("child"));
+	missing.index_roots(missing_roots);
+	assert_equal(false, missing.index_folders(test_token), "failed enumeration reports incomplete");
 }
 
 static void should_invalidate_metadata_when_sidecar_identity_changes()

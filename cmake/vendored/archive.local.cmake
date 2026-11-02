@@ -21,8 +21,10 @@ if (NOT WIN32)
 
     target_sources(diffractor_archive PRIVATE "${_archive_src}/filter_fork_posix.c")
 
+    # The Linux config enables futimesat, whose glibc declaration requires GNU extensions.
     target_compile_definitions(diffractor_archive PRIVATE
-            PLATFORM_CONFIG_H="config_linux.h")
+            PLATFORM_CONFIG_H="config_linux.h"
+            _GNU_SOURCE)
     target_include_directories(diffractor_archive PRIVATE
             "${CMAKE_CURRENT_LIST_DIR}/archive-linux")
 

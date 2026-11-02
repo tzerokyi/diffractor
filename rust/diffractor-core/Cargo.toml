@@ -1,0 +1,10 @@
+[package]
+name = "diffractor-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "LGPL-2.1-or-later"
+description = "Native Rust access to Diffractor's existing media core"
+
+[lib]
+path = "src/lib.rs"

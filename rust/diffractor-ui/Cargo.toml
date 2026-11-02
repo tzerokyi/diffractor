@@ -1,0 +1,13 @@
+[package]
+name = "diffractor-ui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "LGPL-2.1-or-later"
+
+[features]
+visual-audit = ["eframe/__screenshot"]
+
+[dependencies]
+diffractor-core = { path = "../diffractor-core" }
+eframe = { version = "=0.37.0", default-features = false, features = ["glow", "default_fonts", "system_fonts", "x11", "wayland", "clipboard"] }
