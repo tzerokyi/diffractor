@@ -105,7 +105,7 @@ mod tests {
 
         let selected = history.commit(
             Travel::Back,
-            Some(visit("/two", selected)),
+            Some(visit("/two", selected.as_deref().and_then(Path::to_str))),
             Path::new("/one"),
         );
         assert_eq!(selected, Some(PathBuf::from("/one/a.jpg")));
@@ -113,12 +113,12 @@ mod tests {
 
         let selected = history.commit(
             Travel::Forward,
-            Some(visit("/one", selected)),
+            Some(visit("/one", selected.as_deref().and_then(Path::to_str))),
             Path::new("/two"),
         );
         assert_eq!(selected, Some(PathBuf::from("/two/b.jpg")));
 
-        history.commit(Travel::Push, Some(visit("/two", selected)), Path::new("/four"));
+        history.commit(Travel::Push, Some(visit("/two", selected.as_deref().and_then(Path::to_str))), Path::new("/four"));
         assert!(history.forward_target().is_none());
     }
 
