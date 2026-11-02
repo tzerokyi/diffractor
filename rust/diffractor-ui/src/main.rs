@@ -1,8 +1,10 @@
 mod history;
 mod locale;
+mod selection;
 mod video;
 
 use history::{History, Travel, Visit};
+use selection::{Intent, Selection};
 use locale::{tr, Locale, Status, Text};
 
 use std::{
@@ -284,7 +286,10 @@ struct Browser {
     folder: PathBuf,
     address: String,
     entries: Vec<Entry>,
+    // This is the displayed media, NOT the complete selected batch target.
     selected: Option<PathBuf>,
+    selection: Selection,
+    visible_media: Vec<PathBuf>,
     texture: Option<TextureHandle>,
     zoom: f32,
     pan: egui::Vec2,
@@ -537,6 +542,8 @@ impl Browser {
             address: String::new(),
             entries: Vec::new(),
             selected: None,
+            selection: Selection::default(),
+            visible_media: Vec::new(),
             texture: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
@@ -677,19 +684,37 @@ impl Browser {
         });
     }
 
-    // Navigate the original list in-place. Only the destination path is cloned;
-    // keyboard traversal stays cheap even when a folder contains 10,000 entries.
-    fn step_media(&mut self, direction: isize) {
-        let index = next_media_index(
-            &self.entries,
-            self.selected.as_deref(),
-            direction < 0,
-        );
-        if let Some(index) = index {
-            let path = self.entries[index].path.clone();
+    // Focus/selection are source-owned state, not inferred from rendered
+    // thumbnails. Keyboard arrows reuse the same grammar as mouse selection.
+    fn step_media(&mut self, direction: isize, extend: bool) {
+        self.selection
+            .move_focus(&self.visible_media, direction < 0, extend);
+        self.present_selection();
+    }
+
+    fn select_media(&mut self, path: PathBuf, intent: Intent) {
+        if self.folder_open_pending {
+            return;
+        }
+        self.selection.apply(&self.visible_media, &path, intent);
+        self.present_selection();
+    }
+
+    fn present_selection(&mut self) {
+        let single = self.selection.single().map(Path::to_path_buf);
+        if let Some(path) = single {
             if self.selected.as_ref() != Some(&path) {
                 self.open_image(path);
             }
+        } else if self.selected.is_some() || self.texture.is_some() {
+            self.stop_playback();
+            self.image_generation += 1;
+            self.selected = None;
+            self.texture = None;
+            self.metadata = None;
+            self.video_aspect = None;
+            self.full_image_requested = false;
+            self.status = Status::Empty;
         }
     }
 
@@ -771,6 +796,7 @@ impl Browser {
                             self.clear_thumbnails();
                             self.image_generation += 1;
                             self.selected = None;
+                            self.selection.clear();
                             self.texture = None;
                             self.metadata = None;
                             self.video_aspect = None;
@@ -778,6 +804,10 @@ impl Browser {
                             self.folder = path;
                             self.address = self.folder.to_string_lossy().into_owned();
                             self.entries = entries;
+                            self.visible_media = self.entries.iter()
+                                .filter(|entry| !entry.directory)
+                                .map(|entry| entry.path.clone())
+                                .collect();
                             self.truncated = truncated;
                             self.status = Status::Text(if self.entries.is_empty() {
                                 Text::EmptyFolder
@@ -791,6 +821,7 @@ impl Browser {
                                 self.entries.iter().any(|entry| !entry.directory && entry.path == *path)
                             }));
                             if let Some(path) = restore {
+                                self.selection.set_direct(path.clone());
                                 self.open_image(path);
                             }
                             #[cfg(feature = "visual-audit")]
@@ -798,6 +829,7 @@ impl Browser {
                                 self.search_text = query;
                                 self.search();
                             } else if let Some(path) = self.audit_image.take() {
+                                self.selection.set_direct(path.clone());
                                 self.open_image(path);
                             }
                         }
@@ -873,12 +905,19 @@ impl Browser {
                                     directory: false,
                                 })
                                 .collect();
+                            self.visible_media = self.entries.iter()
+                                .map(|entry| entry.path.clone()).collect();
+                            self.selection.retain_visible(&self.visible_media);
                             self.search_active = true;
                             self.truncated = false;
                             self.status = Status::Matches(self.entries.len());
+                            if self.selection.len() != 0 {
+                                self.present_selection();
+                            }
                             #[cfg(feature = "visual-audit")]
                             if let Some(path) = self.audit_image.take() {
                                 if self.entries.iter().any(|entry| entry.path == path) {
+                                    self.selection.set_direct(path.clone());
                                     self.open_image(path);
                                 }
                             }
