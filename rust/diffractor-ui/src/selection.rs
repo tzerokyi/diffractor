@@ -30,6 +30,10 @@ impl Selection {
         self.paths.contains(path)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Path> {
+        self.paths.iter().map(PathBuf::as_path)
+    }
+
     pub fn focus(&self) -> Option<&Path> {
         self.focus.as_deref()
     }
