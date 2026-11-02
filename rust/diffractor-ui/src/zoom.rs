@@ -195,11 +195,11 @@ mod tests {
         z.pan_by(Vec2::new(100000.0, 100000.0), SOURCE, VIEW);
         let bounds = Rect::from_min_size(Pos2::ZERO, VIEW);
         let rect = z.rect(bounds, SOURCE);
-        assert!((rect.max.x - VIEW.x).abs() < 0.01);
-        assert!((rect.max.y - VIEW.y).abs() < 0.01);
+        assert!(rect.min.x.abs() < 0.01 && rect.min.y.abs() < 0.01);
         z.pan_by(Vec2::new(-100000.0, -100000.0), SOURCE, VIEW);
         let rect = z.rect(bounds, SOURCE);
-        assert!(rect.min.x.abs() < 0.01 && rect.min.y.abs() < 0.01);
+        assert!((rect.max.x - VIEW.x).abs() < 0.01);
+        assert!((rect.max.y - VIEW.y).abs() < 0.01);
     }
 
     #[test]
