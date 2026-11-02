@@ -87,7 +87,7 @@ pub fn list_folder(path: &Path) -> Result<(Vec<Entry>, bool), String> {
             first.push(item);
         } else {
             truncated = true;
-            if first.peek().is_some_and(|worst| item < *worst) {
+            if first.peek().is_some_and(|worst| item.cmp(worst).is_lt()) {
                 first.pop();
                 first.push(item);
             }
@@ -137,7 +137,7 @@ mod tests {
             let item = Entry { path: path.into(), directory };
             if heap.len() < 3 {
                 heap.push(item);
-            } else if heap.peek().is_some_and(|worst| item < *worst) {
+            } else if heap.peek().is_some_and(|worst| item.cmp(worst).is_lt()) {
                 heap.pop();
                 heap.push(item);
             }
