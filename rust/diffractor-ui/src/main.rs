@@ -1,6 +1,8 @@
+mod history;
 mod locale;
 mod video;
 
+use history::{History, Travel, Visit};
 use locale::{tr, Locale, Status, Text};
 
 use std::{
@@ -292,6 +294,8 @@ struct Browser {
     language: Locale,
     folder_generation: u64,
     folder_open_pending: bool,
+    history: History,
+    pending_travel: Travel,
     image_generation: u64,
     truncated: bool,
     search_text: String,
@@ -542,6 +546,8 @@ impl Browser {
             language: Locale::detect(),
             folder_generation: 0,
             folder_open_pending: false,
+            history: History::default(),
+            pending_travel: Travel::Push,
             image_generation: 0,
             truncated: false,
             search_text: String::new(),
@@ -585,10 +591,27 @@ impl Browser {
     }
 
     fn begin_open(&mut self, path: PathBuf, resolve: bool) {
+        self.begin_travel(path, resolve, Travel::Push);
+    }
+
+    fn go_back(&mut self) {
+        if let Some(target) = self.history.back_target().map(Path::to_path_buf) {
+            self.begin_travel(target, false, Travel::Back);
+        }
+    }
+
+    fn go_forward(&mut self) {
+        if let Some(target) = self.history.forward_target().map(Path::to_path_buf) {
+            self.begin_travel(target, false, Travel::Forward);
+        }
+    }
+
+    fn begin_travel(&mut self, path: PathBuf, resolve: bool, travel: Travel) {
         // A failed or refused path must never destroy the current browser state.
         // Only a successful Folder response commits the replacement view.
         self.folder_generation += 1;
         self.folder_open_pending = true;
+        self.pending_travel = travel;
         self.search_generation += 1;
         self.search_currency
             .store(self.search_generation, Ordering::Release);
@@ -729,6 +752,19 @@ impl Browser {
                     self.folder_open_pending = false;
                     match result {
                         Ok((entries, truncated)) => {
+                            let previous = if self.folder.as_os_str().is_empty() {
+                                None
+                            } else {
+                                Some(Visit {
+                                    folder: self.folder.clone(),
+                                    selected: self.selected.clone(),
+                                })
+                            };
+                            let remembered_selection = self.history.commit(
+                                self.pending_travel,
+                                previous,
+                                &path,
+                            );
                             // Commit all view changes together; failed opening leaves
                             // selection, preview, playback and thumbnails intact.
                             self.stop_playback();
@@ -748,8 +784,12 @@ impl Browser {
                             } else {
                                 Text::SelectImage
                             });
-                            if let Some(path) = selected {
-                                self.open_image(path);
+                            // A missing/renamed file must not become a phantom selection.
+                            let restore = selected.or(remembered_selection);
+                            if let Some(path) = restore {
+                                if self.entries.iter().any(|entry| !entry.directory && entry.path == path) {
+                                    self.open_image(path);
+                                }
                             }
                             #[cfg(feature = "visual-audit")]
                             if let Some(query) = self.audit_query.take() {
@@ -921,6 +961,16 @@ impl eframe::App for Browser {
                 ui.separator();
                 if ui.button(self.language.badge()).clicked() {
                     self.language.toggle();
+                }
+                let can_back = self.history.back_target().is_some();
+                if ui.add_enabled(can_back, egui::Button::new("←"))
+                    .on_hover_text(tr(self.language, Text::HistoryBack)).clicked() {
+                    self.go_back();
+                }
+                let can_forward = self.history.forward_target().is_some();
+                if ui.add_enabled(can_forward, egui::Button::new("→"))
+                    .on_hover_text(tr(self.language, Text::HistoryForward)).clicked() {
+                    self.go_forward();
                 }
                 let parent = self.folder.parent().map(Path::to_path_buf);
                 if ui.add_enabled(
