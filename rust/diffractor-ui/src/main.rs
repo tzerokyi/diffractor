@@ -1302,6 +1302,18 @@ impl eframe::App for Browser {
                             .maintain_aspect_ratio(true),
                     );
                 }
+            } else if self.selected.as_ref().is_some_and(|path| is_audio(path)) {
+                // Audio has no raster frame; a compact centered stage gives the
+                // player an intentional resting surface instead of empty space.
+                let available_height = ui.available_height();
+                ui.vertical_centered(|ui| {
+                    ui.add_space(((available_height - 165.0) * 0.4).max(16.0));
+                    ui.label(RichText::new("♫").size(80.0)
+                        .color(Color32::from_rgb(127, 184, 193)));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(tr(self.language, Text::Audio))
+                        .size(18.0).strong());
+                });
             }
         });
         #[cfg(feature = "visual-audit")]
