@@ -1455,10 +1455,10 @@ impl eframe::App for Browser {
             }) {
                 ui.horizontal(|ui| {
                     if ui.button("‹").on_hover_text(tr(self.language, Text::Previous)).clicked() {
-                        self.step_media(-1);
+                        self.step_media(-1, false);
                     }
                     if ui.button("›").on_hover_text(tr(self.language, Text::Next)).clicked() {
-                        self.step_media(1);
+                        self.step_media(1, false);
                     }
                     ui.label(RichText::new(file_name).strong().size(17.0));
                 });
