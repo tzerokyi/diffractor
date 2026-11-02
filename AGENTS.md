@@ -32,7 +32,7 @@ open the listed source, and run the listed check. Do not read unrelated document
 | Where a test belongs, or why the suite is arranged this way | [testing](docs/testing.md) | `src/test_*.cpp` | `.\dd.ps1 test` |
 | Translated text, catalogs, plural forms | [testing](docs/testing.md) | [app_text.cpp](src/app_text.cpp), `exe/languages` | `.\dd.ps1 test` |
 | Upgrading or patching a vendored dependency | [third-party](docs/third-party.md) | `third-party/`, `cmake/vendored` | `.\dd.ps1 test` |
-| Portability, Linux build, Rust-native UI migration | [Linux port](docs/linux.md) | `rust/diffractor-ui/src/main.rs`, `rust/diffractor-ui/src/{selection,history,locale}.rs`, `rust/diffractor-core/src/lib.rs`, `src/platform_linux_bridge.cpp`, `src/platform_linux_app.cpp` | `cargo test --manifest-path rust/diffractor-ui/Cargo.toml --locked` and `.github/workflows/linux.yml` |
+| Portability, Linux build, Rust-native UI migration | [Linux port](docs/linux.md) | `rust/diffractor-ui/src/main.rs`, `rust/diffractor-ui/src/{browser_files,selection,history,locale,zoom}.rs`, `rust/diffractor-core/src/lib.rs`, `src/platform_linux_bridge.cpp`, `src/platform_linux_app.cpp` | `cargo test --manifest-path rust/diffractor-ui/Cargo.toml --locked` and `.github/workflows/linux.yml` |
 
 `/test:` filters match the test **name**, case-insensitively, not the file. Every filter above is verified to match at least one test; a filter matching nothing is a failure, not a silent pass. Run them as `.\exe\diffractor64-d.exe /test:*zoom* | Out-Host`.
 
