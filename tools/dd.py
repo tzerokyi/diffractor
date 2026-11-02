@@ -36,6 +36,29 @@ APT_TOOLCHAIN = [
 # System copies of fetched libraries, used during bring-up. These are a convenience: the shipped
 # build fetches and builds its own (see docs/third-party.md). FFmpeg is deliberately absent because
 # it is a Diffractor fork and must never come from a distribution.
+# Arch Linux package names for the same toolchain and optional system libraries.
+# FFmpeg and other pinned project dependencies remain managed by CMake.
+PACMAN_PACKAGES = [
+    "base-devel",
+    "cmake",
+    "ninja",
+    "pkgconf",
+    "ccache",
+    "nasm",
+    "python",
+    "git",
+    "git-lfs",
+    "zlib",
+    "libpng",
+    "libjpeg-turbo",
+    "sqlite",
+    "libwebp",
+    "libarchive",
+    "hunspell",
+    "minizip",
+]
+
+
 APT_DEPENDENCIES = [
     "zlib1g-dev",
     "libpng-dev",
@@ -227,10 +250,30 @@ def cmd_setup(args: argparse.Namespace) -> None:
         cmd_info(args)
         return
 
+    if shutil.which("pacman"):
+        missing = [
+            package for package in PACMAN_PACKAGES
+            if subprocess.run(
+                ["pacman", "-Q", package], stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, check=False,
+            ).returncode != 0
+        ]
+        say(f"Diffractor Arch setup ({len(PACMAN_PACKAGES) - len(missing)}/{len(PACMAN_PACKAGES)} present)")
+        for package in PACMAN_PACKAGES:
+            say(f"  {'MISSING' if package in missing else 'ok     '}  {package}")
+        if not missing:
+            say("Nothing to install.")
+            return
+        if args.check:
+            sys.exit(f"{len(missing)} package(s) missing. Run './dd setup' to install them.")
+        run(["sudo", "pacman", "-S", "--needed", *missing])
+        configure_git_for_mirrored_tree()
+        say("Setup complete. Next: ./dd build")
+        return
+
     if not shutil.which("apt-get"):
-        sys.exit("setup currently understands apt only. Install the equivalents by hand:\n"
-                 f"  toolchain:    {' '.join(APT_TOOLCHAIN)}\n"
-                 f"  dependencies: {' '.join(APT_DEPENDENCIES)}")
+        sys.exit("setup supports pacman and apt-get. Install CMake, Ninja, a C/C++ "
+                 "toolchain, nasm, git-lfs and pkg-config manually.")
 
     wanted = APT_TOOLCHAIN + APT_DEPENDENCIES
     missing = missing_apt_packages(wanted)
