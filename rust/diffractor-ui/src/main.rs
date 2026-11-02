@@ -296,6 +296,23 @@ struct Browser {
 
 impl Browser {
     fn new(cc: &eframe::CreationContext<'_>, initial: PathBuf) -> Self {
+        // Native dark chrome: controls, panels and selection share one palette.
+        let mut style = (*cc.egui_ctx.style()).clone();
+        style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+        style.spacing.button_padding = egui::vec2(12.0, 6.0);
+        style.visuals = egui::Visuals::dark();
+        style.visuals.panel_fill = Color32::from_rgb(24, 27, 32);
+        style.visuals.extreme_bg_color = Color32::from_rgb(17, 20, 24);
+        style.visuals.faint_bg_color = Color32::from_rgb(34, 39, 45);
+        style.visuals.selection.bg_fill = Color32::from_rgb(44, 87, 116);
+        style.visuals.selection.stroke = egui::Stroke::new(
+            1.0,
+            Color32::from_rgb(173, 215, 233),
+        );
+        style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(40, 45, 52);
+        style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(55, 64, 74);
+        cc.egui_ctx.set_style(style);
+
         let (sender, requests) = mpsc::channel();
         let (responses, receiver) = mpsc::channel();
         let (thumbnail_sender, thumbnail_requests) = mpsc::channel::<ThumbnailRequest>();
@@ -601,6 +618,30 @@ impl Browser {
         });
     }
 
+    // Navigate the media list without accidentally entering a folder. The current
+    // selection remains authoritative; browsing never mutates any source file.
+    fn step_media(&mut self, direction: isize) {
+        let media: Vec<_> = self.entries.iter()
+            .filter(|entry| !entry.directory)
+            .map(|entry| entry.path.clone())
+            .collect();
+        if media.is_empty() {
+            return;
+        }
+        let current = self.selected.as_ref()
+            .and_then(|path| media.iter().position(|item| item == path));
+        let next = match (current, direction < 0) {
+            (Some(0), true) => 0,
+            (Some(index), true) => index - 1,
+            (Some(index), false) => (index + 1).min(media.len() - 1),
+            (None, true) => media.len() - 1,
+            (None, false) => 0,
+        };
+        if self.selected.as_ref() != Some(&media[next]) {
+            self.open_image(media[next].clone());
+        }
+    }
+
     fn open_image(&mut self, path: PathBuf) {
         self.stop_playback();
         self.zoom = 1.0;
@@ -820,9 +861,18 @@ impl eframe::App for Browser {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
         self.receive(&ctx);
+        // Never steal arrow keys from path/search edits or focused media controls.
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+                self.step_media(1);
+            } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+                self.step_media(-1);
+            }
+        }
         egui::Panel::top("header").show(root, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Diffractor");
+                ui.label(RichText::new("Diffractor").size(22.0).strong()
+                    .color(Color32::from_rgb(220, 237, 244)));
                 ui.separator();
                 if ui.button("Up").clicked() {
                     if let Some(parent) = self.folder.parent() {
@@ -830,7 +880,7 @@ impl eframe::App for Browser {
                     }
                 }
                 let edit = ui.add_sized(
-                    [ui.available_width() - 65.0, 28.0],
+                    [(ui.available_width() - 65.0).max(100.0), 28.0],
                     egui::TextEdit::singleline(&mut self.address).hint_text("File or folder path"),
                 );
                 if (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
@@ -879,7 +929,7 @@ impl eframe::App for Browser {
                     ui.label("Showing first 10,000 entries.");
                 }
                 ui.separator();
-                egui::ScrollArea::vertical().show_rows(ui, 48.0, self.entries.len(), |ui, rows| {
+                egui::ScrollArea::vertical().show_rows(ui, 56.0, self.entries.len(), |ui, rows| {
                     for entry in &self.entries[rows] {
                         let name = if self.search_active {
                             entry
@@ -891,7 +941,15 @@ impl eframe::App for Browser {
                             entry.path.file_name().unwrap_or_default().to_string_lossy()
                         };
                         let selected = self.selected.as_ref() == Some(&entry.path);
-                        ui.horizontal(|ui| {
+                        let row = egui::Frame::new()
+                            .fill(if selected { ui.visuals().selection.bg_fill } else {
+                                Color32::TRANSPARENT
+                            })
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(6, 4))
+                            .show(ui, |ui| {
+                            ui.set_min_height(48.0);
+                            ui.horizontal(|ui| {
                             let media = !entry.directory
                                 && (is_image(&entry.path) || is_video(&entry.path));
                             ui.allocate_ui_with_layout(
@@ -926,11 +984,7 @@ impl eframe::App for Browser {
                                     }
                                 },
                             );
-                            let label = if selected {
-                                format!("› {name}")
-                            } else {
-                                name.to_string()
-                            };
+                            let label = name.to_string();
                             if ui
                                 .add(
                                     egui::Label::new(label)
@@ -943,7 +997,11 @@ impl eframe::App for Browser {
                             {
                                 open = Some((entry.path.clone(), entry.directory));
                             }
+                            });
                         });
+                        if row.response.interact(egui::Sense::click()).clicked() {
+                            open = Some((entry.path.clone(), entry.directory));
+                        }
                     }
                 });
             });
@@ -1026,9 +1084,18 @@ impl eframe::App for Browser {
         }
         egui::CentralPanel::default().show(root, |ui| {
             if let Some(path) = &self.selected {
-                ui.label(
-                    RichText::new(path.file_name().unwrap_or_default().to_string_lossy()).strong(),
-                );
+                ui.horizontal(|ui| {
+                    if ui.button("‹").on_hover_text("Previous media (←)").clicked() {
+                        self.step_media(-1);
+                    }
+                    if ui.button("›").on_hover_text("Next media (→)").clicked() {
+                        self.step_media(1);
+                    }
+                    ui.label(
+                        RichText::new(path.file_name().unwrap_or_default().to_string_lossy())
+                            .strong().size(17.0),
+                    );
+                });
             } else {
                 ui.heading("Photo preview");
             }
@@ -1118,9 +1185,20 @@ impl eframe::App for Browser {
                 if self.playback_shared.is_some() && self.video_aspect.is_some() {
                     let aspect = self.video_aspect.unwrap_or(1.0);
                     let width = available.x.min(available.y * aspect).max(0.0);
-                    ui.add(
-                        egui::Image::new(&texture)
-                            .fit_to_exact_size(egui::vec2(width, width / aspect)),
+                    let (viewport, _) = ui.allocate_exact_size(
+                        available.max(egui::Vec2::ZERO),
+                        egui::Sense::hover(),
+                    );
+                    let display = egui::vec2(width, width / aspect);
+                    let rect = egui::Rect::from_center_size(viewport.center(), display);
+                    ui.painter_at(viewport).image(
+                        texture.id(),
+                        rect,
+                        egui::Rect::from_min_max(
+                            egui::Pos2::ZERO,
+                            egui::pos2(1.0, 1.0),
+                        ),
+                        Color32::WHITE,
                     );
                 } else if still_image {
                     let (viewport, response) = ui.allocate_exact_size(
