@@ -16,6 +16,12 @@ on:
       - '.github/workflows/rust-native-ui.yml'
   workflow_dispatch:
 
+# Only the newest commit of a PR/branch needs the expensive build result.
+# Preserve Debug/Release jobs within the same run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
