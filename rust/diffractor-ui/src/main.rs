@@ -176,26 +176,6 @@ fn grid_columns(width: f32) -> usize {
     (width.max(0.0) / 146.0).floor().clamp(1.0, 4.0) as usize
 }
 
-fn next_media_index(entries: &[Entry], selected: Option<&Path>, reverse: bool) -> Option<usize> {
-    let current = selected.and_then(|path| {
-        entries.iter().position(|item| !item.directory && item.path == path)
-    });
-    if reverse {
-        match current {
-            Some(index) => entries[..index]
-                .iter()
-                .rposition(|item| !item.directory)
-                .or(Some(index)),
-            None => entries.iter().rposition(|item| !item.directory),
-        }
-    } else {
-        entries.iter().enumerate().skip(current.map_or(0, |index| index + 1))
-            .find(|(_, item)| !item.directory)
-            .map(|(index, _)| index)
-            .or(current)
-    }
-}
-
 fn list_folder(path: &Path) -> Result<(Vec<Entry>, bool), String> {
     let mut items = Vec::new();
     let mut truncated = false;
@@ -1806,24 +1786,6 @@ mod tests {
         assert_eq!(open_target(&file).unwrap(), (root.clone(), Some(file)));
         assert!(open_target(&root.join("Gherkin.xmp")).is_err());
         assert!(open_target(&root.join("does-not-exist.jpg")).is_err());
-    }
-
-    #[test]
-    fn media_navigation_skips_folders_and_stops_at_edges() {
-        let entries = [
-            Entry { path: PathBuf::from("/gallery/folder"), directory: true },
-            Entry { path: PathBuf::from("/gallery/one.jpg"), directory: false },
-            Entry { path: PathBuf::from("/gallery/more"), directory: true },
-            Entry { path: PathBuf::from("/gallery/two.mp4"), directory: false },
-        ];
-        assert_eq!(next_media_index(&entries, None, false), Some(1));
-        assert_eq!(next_media_index(&entries, None, true), Some(3));
-        assert_eq!(next_media_index(&entries, Some(&entries[1].path), false), Some(3));
-        assert_eq!(next_media_index(&entries, Some(&entries[3].path), true), Some(1));
-        assert_eq!(next_media_index(&entries, Some(&entries[1].path), true), Some(1));
-        assert_eq!(next_media_index(&entries, Some(&entries[3].path), false), Some(3));
-        assert_eq!(next_media_index(&entries[..1], None, false), None);
-        assert_eq!(next_media_index(&[], None, true), None);
     }
 
     #[test]
