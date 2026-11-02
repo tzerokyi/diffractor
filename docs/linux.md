@@ -200,3 +200,82 @@ how they join the application build.
 - [platform_linux_video.cpp](../src/platform_linux_video.cpp): the isolated video preview worker.
 - [Arch package template](../packaging/arch/PKGBUILD.in) and
   [snapshot builder](../tools/make_arch_snapshot.sh): the experimental local package workflow.
+
+## Native Product Delivery Plan (2026-11-02)
+
+**Authority:** This section owns the Linux delivery sequence and acceptance criteria.
+[Design](design.md) remains the source for original Diffractor user behavior; this
+document does not redefine file operation, selection, metadata or rendering semantics.
+
+### Architectural decision
+
+Two different targets must not be confused:
+
+- **Native preview:** `rust/diffractor-ui` is a deliberately limited, immediate-use
+  local browser built with egui. It consumes the real C++ libfiles/index bridge
+  and native media playback, but has a separate UI state machine. It is valuable
+  as an Arch Linux photo browser and as a test client for the media bridge.
+- **Full Diffractor port:** The Windows application has a much richer retained C++
+  UI and command/state engine. Reimplementing its entire selection, edit, search,
+  sync and navigation model in a second Rust UI would create two product implementations
+  that drift. Full parity therefore targets a Linux native-window, text, input,
+  software-present and audio backend for **libdesktop**, so the existing Diffractor
+  C++ UI and state model can run unchanged wherever possible.
+
+The Rust preview may ship first as a clearly identified preview, but it is
+**not** to be labeled the complete port. The remaining Linux backend lives in
+the separately version-pinned libdesktop dependency: build/pin an explicitly
+controlled fork or submit upstream changes, rather than silently patching a
+downloaded dependency. Hardware acceleration follows software correctness,
+not the other way around.
+
+### Native preview interaction contract
+
+- One browsing scope at a time; changing a folder cancels stale searches,
+  image work and thumbnails. Directory navigation never changes user files.
+- The full row, image and text are viable click targets; selection has a
+  visible background, remains distinct from hover and contains the media
+  whose metadata and preview are displayed.
+- Previous/next media ignore directory entries and stop at scope edges.
+  Arrow navigation never captures keys from focused text editors.
+- Image zoom/drag remains clamped to the viewport; video is centered
+  at its natural aspect; neither reveals an image outside its bounds.
+- Korean and English UI copy use typed semantic tokens. Locale changes
+  immediately without mutating domain state; native OS/decoder diagnostics
+  may retain their original message until diagnostic localization is added.
+- Media decode, probing, searches and folder enumeration remain off the
+  egui UI thread. Existing memory limits and generation checks are invariants.
+- Expose missing capabilities honestly. No dummy success for editing,
+  sharing, undo, multi-root collection management or shell integration.
+
+### Phases and gates
+
+| Phase | Deliverable | Observable acceptance |
+| --- | --- | --- |
+| L1 — Native preview UX | Consistent palette, row target/selection, arrows and previous/next buttons, centered video, live ko/en copy; audio metadata | A normal media folder can be browsed without misleading selection or layout; switching language preserves selected path/zoom/play state |
+| L2 — Preview robustness | Keyboard navigation in long lists, responsive panels, per-folder navigation history, scroll continuity, durable thumbnails, failed/offline media feedback | Thousands of mixed files do not hang the UI; moving across/searching folders keeps correct focus and no stale preview |
+| L3 — C++ UI foundation | libdesktop Linux window/event loop, font fallback/shaping, HiDPI, clipboard/drag-drop, native dialogs, software rasterizer present, PipeWire/PulseAudio output | Existing C++ Items view opens on X11 and Wayland, with keyboard/mouse/text, resize, image display and bounded memory |
+| L4 — Original behavior parity | Wire existing app commands, collection model, full screen/zoom, metadata, edit, batch plans and recoverable file operations to Linux services | Original cross-platform [Design](design.md) interactions and review-before-write semantics pass Linux parity cases; no duplicate Rust behavior model |
+| L5 — Runtime and distribution | Crash recovery, codec tests, sandbox boundaries, ICC/rotation and mixed-DPI visual parity, Arch PKGBUILD and desktop integration | Successful local Debug/Release builds and GUI smoke check, reproducible package, correct source/relinking notices, no unverified success statements |
+
+**Dependency order:** L1 → L2 for the near-term Rust preview; L3 → L4 → L5
+for full native product. L3 can proceed independently of L2; polish of the
+preview must not delay platform parity. Re-evaluate retention of the Rust UI
+after the original C++ Items view is functional, to avoid indefinitely
+maintaining two competing frontends.
+
+### Review checklist / evidence
+
+The original Linux headless build and tests are documented above. The native
+preview's functional source is currently on `arch-linux-build`, not `master`.
+Code inspection confirms that the UI has generation-checked worker responses
+and that the L1 controls are wired. **No runtime GUI screenshot, local Arch
+compile, Wayland/X11 behavior or human parity check is claimed by this review.**
+Before promoting any milestone to a verified baseline, record the tested
+commit, exact command, outcome and any visual/regression evidence here.
+
+**Known limits:** no original app-window frontend on Linux; optional library
+headers and system fonts affect native preview operation; large RAW/HDR and
+HEIF cases still need real-display review; XMP and non-destructive edit workflows
+are not present in the Rust frontend. Do not report L3–L5 as complete merely
+because the headless portable suite passes.
