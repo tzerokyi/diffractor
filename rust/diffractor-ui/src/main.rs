@@ -892,9 +892,13 @@ impl eframe::App for Browser {
                 if ui.button(self.language.badge()).clicked() {
                     self.language.toggle();
                 }
-                if ui.button(tr(self.language, Text::Up)).clicked() {
-                    if let Some(parent) = self.folder.parent() {
-                        self.open_folder(parent.to_path_buf());
+                let parent = self.folder.parent().map(Path::to_path_buf);
+                if ui.add_enabled(
+                    parent.is_some(),
+                    egui::Button::new(tr(self.language, Text::Up)),
+                ).clicked() {
+                    if let Some(parent) = parent {
+                        self.open_folder(parent);
                     }
                 }
                 let edit = ui.add_sized(
@@ -907,20 +911,27 @@ impl eframe::App for Browser {
                     self.open_path(PathBuf::from(self.address.clone()));
                 }
             });
+            ui.label(RichText::new(tr(self.language, Text::SearchScope)).weak());
             ui.horizontal(|ui| {
-                ui.label(tr(self.language, Text::SearchScope));
-                let edit = ui.add(
+                let return_visible = self.search_active || self.search_pending;
+                let width_reserved = if return_visible { 185.0 } else { 92.0 };
+                let edit = ui.add_sized(
+                    [(ui.available_width() - width_reserved).max(100.0), 28.0],
                     egui::TextEdit::singleline(&mut self.search_text)
                         .hint_text(tr(self.language, Text::SearchHint)),
                 );
-                if (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    || ui.button(tr(self.language, Text::Search)).clicked()
-                {
+                let enter = edit.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let can_search = !self.folder.as_os_str().is_empty()
+                    && !self.search_text.trim().is_empty();
+                let clicked = ui.add_enabled(
+                    can_search,
+                    egui::Button::new(tr(self.language, Text::Search)),
+                ).clicked();
+                if can_search && (enter || clicked) {
                     self.search();
                 }
-                if (self.search_active || self.search_pending)
-                    && ui.button(tr(self.language, Text::BackToFolder)).clicked()
-                {
+                if return_visible && ui.button(tr(self.language, Text::BackToFolder)).clicked() {
                     self.open_folder(self.folder.clone());
                 }
             });
