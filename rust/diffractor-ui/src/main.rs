@@ -561,21 +561,13 @@ impl Browser {
     }
 
     fn begin_open(&mut self, path: PathBuf, resolve: bool) {
-        self.stop_playback();
-        self.clear_thumbnails();
+        // A failed or refused path must never destroy the current browser state.
+        // Only a successful Folder response commits the replacement view.
         self.folder_generation += 1;
-        self.image_generation += 1;
         self.search_generation += 1;
         self.search_currency
             .store(self.search_generation, Ordering::Release);
-        self.search_active = false;
         self.search_pending = false;
-        self.selected = None;
-        self.texture = None;
-        self.metadata = None;
-        self.video_aspect = None;
-        self.entries.clear();
-        self.truncated = false;
         self.status = Status::Text(Text::OpeningFolder);
         let request = if resolve {
             Request::OpenPath(self.folder_generation, path)
@@ -709,6 +701,16 @@ impl Browser {
                 Response::Folder(id, path, result, selected) if id == self.folder_generation => {
                     match result {
                         Ok((entries, truncated)) => {
+                            // Commit all view changes together; failed opening leaves
+                            // selection, preview, playback and thumbnails intact.
+                            self.stop_playback();
+                            self.clear_thumbnails();
+                            self.image_generation += 1;
+                            self.selected = None;
+                            self.texture = None;
+                            self.metadata = None;
+                            self.video_aspect = None;
+                            self.search_active = false;
                             self.folder = path;
                             self.address = self.folder.to_string_lossy().into_owned();
                             self.entries = entries;
