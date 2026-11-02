@@ -1149,7 +1149,9 @@ impl eframe::App for Browser {
                 ui.separator();
                 if self.grid_view {
                     let columns = grid_columns(ui.available_width());
-                    let cell_width = (ui.available_width() / columns as f32).max(96.0);
+                    let gap = ui.spacing().item_spacing.x;
+                    let cell_width = ((ui.available_width() - gap * (columns - 1) as f32)
+                        / columns as f32).max(96.0);
                     let row_count = self.entries.len().div_ceil(columns);
                     egui::ScrollArea::vertical().show_rows(ui, 152.0, row_count, |ui, rows| {
                         for row in rows {
@@ -1197,9 +1199,12 @@ impl eframe::App for Browser {
                                                     }
                                                 },
                                             );
-                                            ui.add(egui::Label::new(name.to_string()).truncate()
+                                            if ui.add(egui::Label::new(name.to_string()).truncate()
                                                 .sense(egui::Sense::click()))
-                                                .on_hover_text(name.as_ref());
+                                                .on_hover_text(name.as_ref()).clicked() {
+                                                open = Some((entry.path.clone(), entry.directory,
+                                                    selection_intent(ui.input(|i| i.modifiers))));
+                                            }
                                         });
                                     if frame.response.interact(egui::Sense::click()).clicked() {
                                         open = Some((entry.path.clone(), entry.directory,
