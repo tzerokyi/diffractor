@@ -28,6 +28,15 @@ const MAX_ENTRIES: usize = 10_000;
 const MAX_THUMBNAILS: usize = 96;
 const MAX_THUMBNAIL_PENDING: usize = 48;
 
+fn selection_intent(modifiers: egui::Modifiers) -> Intent {
+    match (modifiers.shift, modifiers.command || modifiers.ctrl) {
+        (true, true) => Intent::AddRange,
+        (true, false) => Intent::Range,
+        (false, true) => Intent::Toggle,
+        (false, false) => Intent::Replace,
+    }
+}
+
 fn clamp_pan(pan: egui::Vec2, image: egui::Vec2, viewport: egui::Vec2) -> egui::Vec2 {
     let limit = ((image - viewport) * 0.5).max(egui::Vec2::ZERO);
     egui::vec2(
@@ -988,11 +997,20 @@ impl eframe::App for Browser {
         let ctx = root.ctx().clone();
         self.receive(&ctx);
         // Never steal arrow keys from path/search edits or focused media controls.
-        if !ctx.wants_keyboard_input() {
-            if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-                self.step_media(1);
-            } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-                self.step_media(-1);
+        if !ctx.wants_keyboard_input() && !self.folder_open_pending {
+            let (all, next, previous, extend) = ctx.input(|input| (
+                input.modifiers.command && input.key_pressed(egui::Key::A),
+                input.key_pressed(egui::Key::ArrowRight),
+                input.key_pressed(egui::Key::ArrowLeft),
+                input.modifiers.shift,
+            ));
+            if all {
+                self.selection.select_all(&self.visible_media);
+                self.present_selection();
+            } else if next {
+                self.step_media(1, extend);
+            } else if previous {
+                self.step_media(-1, extend);
             }
         }
         egui::Panel::top("header").show(root, |ui| {
@@ -1094,7 +1112,7 @@ impl eframe::App for Browser {
                         } else {
                             entry.path.file_name().unwrap_or_default().to_string_lossy()
                         };
-                        let selected = self.selected.as_ref() == Some(&entry.path);
+                        let selected = self.selection.contains(&entry.path);
                         let row = egui::Frame::new()
                             .fill(if selected { ui.visuals().selection.bg_fill } else {
                                 Color32::TRANSPARENT
@@ -1121,7 +1139,7 @@ impl eframe::App for Browser {
                                             )
                                             .clicked()
                                         {
-                                            open = Some((entry.path.clone(), entry.directory));
+                                            open = Some((entry.path.clone(), entry.directory, selection_intent(ui.input(|i| i.modifiers))));
                                         }
                                     } else {
                                         if media {
@@ -1154,12 +1172,12 @@ impl eframe::App for Browser {
                                 .on_hover_text(name.as_ref())
                                 .clicked()
                             {
-                                open = Some((entry.path.clone(), entry.directory));
+                                open = Some((entry.path.clone(), entry.directory, selection_intent(ui.input(|i| i.modifiers))));
                             }
                             });
                         });
                         if row.response.interact(egui::Sense::click()).clicked() {
-                            open = Some((entry.path.clone(), entry.directory));
+                            open = Some((entry.path.clone(), entry.directory, selection_intent(ui.input(|i| i.modifiers))));
                         }
                     }
                 });
@@ -1167,11 +1185,11 @@ impl eframe::App for Browser {
         for path in needed_thumbnails {
             self.request_thumbnail(path);
         }
-        if let Some((path, directory)) = open {
+        if let Some((path, directory, intent)) = open {
             if directory {
                 self.open_folder(path);
             } else {
-                self.open_image(path);
+                self.select_media(path, intent);
             }
         }
         if let Some(metadata) = &self.metadata {
@@ -1257,6 +1275,8 @@ impl eframe::App for Browser {
                     }
                     ui.label(RichText::new(file_name).strong().size(17.0));
                 });
+            } else if self.selection.len() > 1 {
+                ui.heading(tr(self.language, Text::SelectionSummary));
             } else {
                 ui.heading(tr(self.language, Text::PhotoPreview));
             }
