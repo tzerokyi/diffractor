@@ -296,9 +296,10 @@ Preserve original semantics unless a user-approved difference is documented.
   (`arch-linux-build`, 2026-11-02). Includes pure Rust selection,
   source-ordered paired comparison, virtualized grid/list, native fullscreen,
   history and Korean/English tokens. The original C++ media bridge is retained.
-- Evidence collected here: repository source inspection, cross-file token parity,
-  algorithm/edge-case source tests added, and a Rust CI job specification.
-  **No observed Cargo/Arch GUI success or pixel-parity measurement** is asserted.
+- Evidence collected here: repository source inspection, cross-file token
+  parity, source tests, and **observed GitHub Actions `cargo check` success**
+  for `9051ab2`. This validates Rust types/borrows, not linker success,
+  runtime behavior, Arch GUI or pixel-parity measurements.
 - The [Windows reference screenshot](../screenshot.webp) and the original
   [Design](design.md), [Zoom](zoom.md) and [Selection Controls](selection-controls.md)
   govern the next visual alignment pass. Default egui colours, thumbnails and
@@ -326,10 +327,18 @@ Preserve original semantics unless a user-approved difference is documented.
 - A separate `.github/workflows/rust-native-ui.yml` runs `cargo check --locked
   --all-targets` for both Rust crates without waiting for the C++ native
   linker. `.github/workflows/linux.yml` remains the full native test gate.
-- **Validation**: source review and Rust source tests authored only.
-  The review environment has no `cargo`, `rustc` or networked checkout;
-  no actually executed CI run, Arch binary or Wayland GUI validation is
-  asserted. Correct any build diagnostics before promoting the stage.
+- **Validation**: GitHub Actions Rust Native UI
+  [run 41467435869](https://github.com/tzerokyi/diffractor/actions/runs/41467435869)
+  passed both crates' `cargo check --locked --all-targets` on source commit
+  `9051ab2`. This proves type/borrow correctness for that revision,
+  including the new Rust zoom and bounded browser modules; it does not
+  execute their tests or link the C++ media bridge. The first check
+  [run 41467144508](https://github.com/tzerokyi/diffractor/actions/runs/41467144508)
+  failed on egui 0.37 Context API changes, missing test import and
+  `Option<PathBuf>`/borrowed-path test mismatch; all were corrected before
+  the passing revision. The dedicated runner now also builds and executes
+  isolated `selection`, `history` and `browser_files` unit tests; their
+  result is still pending. No Arch binary or Wayland GUI parity is asserted.
 
 ### Current source checkpoint / verification integrity
 
@@ -349,9 +358,10 @@ Preserve original semantics unless a user-approved difference is documented.
   ordering and type eligibility, virtual grid columns, navigation and image
   orientation; **they have not been executed here**. Tool access in this
   session permits source review and commits but not a local Rust/Arch build.
-- No VERIFIED L1/R1 runtime baseline is claimed. Static source inspection,
-  Cargo check, unit tests, GUI interaction, reference screenshots and
-  performance measurements must remain distinct evidence categories.
+- R1 Rust type-check baseline is achieved at `9051ab2`, but no VERIFIED
+  end-to-end L1/R1 runtime baseline is claimed. Static inspection, Cargo
+  type-check, unit tests, C++ bridge link, native GUI interactions, screenshot
+  parity and performance are distinct evidence categories.
 
 Next implementation entry: run the Rust-only type-check CI (and the complete
 Linux bridge test when available), repair compilation defects and then verify
