@@ -37,6 +37,8 @@ the original zoom model, without its navigator, zoom ladder, or progressive tile
 The preview accepts a media file or folder as its command-line argument and advertises supported
 media types to desktop file managers. A file argument opens its containing folder and selects the
 file; resolving the path and reading the folder happen on the worker.
+Common camera RAW extensions are visible in the browser, with previews decoded through libfiles'
+RAW support when ordinary image decoding does not apply. RAW sidecar metadata is not yet shown.
 
 ## Platform Boundary
 

@@ -101,7 +101,8 @@ fn is_image(path: &Path) -> bool {
     path.extension().and_then(OsStr::to_str).is_some_and(|ext| {
         [
             "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "jxl", "gif", "tif", "tiff",
-            "bmp", "psd",
+            "bmp", "psd", "cr2", "cr3", "nef", "nrw", "arw", "dng", "raf", "orf", "rw2", "pef",
+            "srw", "3fr", "iiq", "erf", "kdc", "mos", "mrw", "x3f",
         ]
         .iter()
         .any(|candidate| ext.eq_ignore_ascii_case(candidate))

@@ -7,6 +7,7 @@
 
 #include "libfiles/decode.h"
 #include "libfiles/properties.h"
+#include "libfiles/raw.h"
 
 #include <algorithm>
 #include <fstream>
@@ -136,7 +137,17 @@ extern "C" diffractor_decoded_image* diffractor_decode_image(const char* path, c
         options.target_width = target_width;
         options.target_height = target_height;
         const auto result = libfiles::decode(reader, sink, options);
-        if (!result.success) return nullptr;
+        if (!result.success)
+        {
+            const auto raw = libfiles::load_raw(std::filesystem::path(path), sink, true);
+            if (!raw.success) return nullptr;
+            if (!raw.jpeg.empty())
+            {
+                libfiles::reader preview{std::span<const std::uint8_t>(raw.jpeg)};
+                if (!libfiles::decode(preview, sink, options).success) return nullptr;
+            }
+            image->orientation = raw.orientation;
+        }
         if (image->opaque)
             for (std::size_t i = 3; i < image->pixels.size(); i += 4) image->pixels[i] = 255;
         return image.release();
