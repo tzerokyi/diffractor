@@ -1,4 +1,7 @@
+mod locale;
 mod video;
+
+use locale::{tr, Locale, Status, Text};
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -261,7 +264,8 @@ struct Browser {
     pan: egui::Vec2,
     full_image_requested: bool,
     metadata: Option<Metadata>,
-    status: String,
+    status: Status,
+    language: Locale,
     folder_generation: u64,
     image_generation: u64,
     truncated: bool,
@@ -502,7 +506,8 @@ impl Browser {
             pan: egui::Vec2::ZERO,
             full_image_requested: false,
             metadata: None,
-            status: String::new(),
+            status: Status::Empty,
+            language: Locale::detect(),
             folder_generation: 0,
             image_generation: 0,
             truncated: false,
@@ -562,7 +567,7 @@ impl Browser {
         self.video_aspect = None;
         self.entries.clear();
         self.truncated = false;
-        self.status = "Opening folder…".into();
+        self.status = Status::Text(Text::OpeningFolder);
         let request = if resolve {
             Request::OpenPath(self.folder_generation, path)
         } else {
@@ -610,7 +615,7 @@ impl Browser {
         self.search_currency
             .store(self.search_generation, Ordering::Release);
         self.search_pending = true;
-        self.status = "Indexing this folder and searching…".into();
+        self.status = Status::Text(Text::Indexing);
         let _ = self.search_sender.send(SearchRequest {
             id: self.search_generation,
             folder: self.folder.clone(),
@@ -653,10 +658,10 @@ impl Browser {
         self.metadata = None;
         self.video_aspect = None;
         if is_audio(&path) {
-            self.status = "Audio ready · press Play".into();
+            self.status = Status::Text(Text::AudioReady);
             return;
         }
-        self.status = "Loading image…".into();
+        self.status = Status::Text(Text::LoadingImage);
         let _ = self
             .sender
             .send(Request::Image(self.image_generation, path));
@@ -677,7 +682,7 @@ impl Browser {
         };
         self.playback_generation += 1;
         self.playback_state = 1;
-        self.status = "Opening media…".into();
+        self.status = Status::Text(Text::OpeningMedia);
         let repaint = ctx.clone();
         let shared = video::Shared::new(move || repaint.request_repaint());
         self.playback_shared = Some(shared.clone());
@@ -698,12 +703,11 @@ impl Browser {
                             self.address = self.folder.to_string_lossy().into_owned();
                             self.entries = entries;
                             self.truncated = truncated;
-                            self.status = if self.entries.is_empty() {
-                                "No folders or supported media files here."
+                            self.status = Status::Text(if self.entries.is_empty() {
+                                Text::EmptyFolder
                             } else {
-                                "Select an image to preview it."
-                            }
-                            .into();
+                                Text::SelectImage
+                            });
                             if let Some(path) = selected {
                                 self.open_image(path);
                             }
@@ -715,7 +719,7 @@ impl Browser {
                                 self.open_image(path);
                             }
                         }
-                        Err(error) => self.status = error,
+                        Err(error) => self.status = Status::Error(error),
                     }
                 }
                 Response::Image(id, path, result)
@@ -733,17 +737,13 @@ impl Browser {
                                 image,
                                 egui::TextureOptions::LINEAR,
                             ));
-                            self.status = if video {
-                                format!("Video preview: {} × {} · press Play", size[0], size[1])
-                            } else {
-                                format!("Preview: {} × {}", size[0], size[1])
-                            };
+                            self.status = Status::Image { width: size[0], height: size[1], video, full: false };
                             #[cfg(feature = "visual-audit")]
                             if video && self.audit_autoplay {
                                 self.start_playback(ctx);
                             }
                         }
-                        Err(error) => self.status = error,
+                        Err(error) => self.status = Status::Error(error),
                     }
                 }
                 Response::FullImage(id, path, result)
@@ -754,7 +754,7 @@ impl Browser {
                             let size = image.size;
                             let max_side = ctx.input(|input| input.max_texture_side);
                             if size[0] > max_side || size[1] > max_side {
-                                self.status = "Full image exceeds the graphics texture limit; showing preview.".into();
+                                self.status = Status::Text(Text::FullImageTooLarge);
                                 continue;
                             }
                             self.texture = Some(ctx.load_texture(
@@ -762,9 +762,9 @@ impl Browser {
                                 image,
                                 egui::TextureOptions::LINEAR,
                             ));
-                            self.status = format!("Image: {} × {}", size[0], size[1]);
+                            self.status = Status::Image { width: size[0], height: size[1], video: false, full: true };
                         }
-                        Err(error) => self.status = error,
+                        Err(error) => self.status = Status::Error(error),
                     }
                 }
                 Response::Search(id, folder, result)
@@ -788,7 +788,7 @@ impl Browser {
                                 .collect();
                             self.search_active = true;
                             self.truncated = false;
-                            self.status = format!("{} matching media files", self.entries.len());
+                            self.status = Status::Matches(self.entries.len());
                             #[cfg(feature = "visual-audit")]
                             if let Some(path) = self.audit_image.take() {
                                 if self.entries.iter().any(|entry| entry.path == path) {
@@ -796,7 +796,7 @@ impl Browser {
                                 }
                             }
                         }
-                        Err(error) => self.status = format!("Search failed: {error}"),
+                        Err(error) => self.status = Status::SearchError(error),
                     }
                 }
                 Response::Playback(id, result) if id == self.playback_generation => match result {
@@ -805,19 +805,19 @@ impl Browser {
                         self.playback_time = time.max(0);
                         self.playback_duration = duration.max(0);
                         if state == 7 {
-                            self.status = "Playback failed.".into();
+                            self.status = Status::Text(Text::PlaybackFailed);
                         } else if state == 6 {
-                            self.status = "Playback finished.".into();
+                            self.status = Status::Text(Text::PlaybackFinished);
                         } else if state == 3 {
-                            self.status = "Playing".into();
+                            self.status = Status::Text(Text::Playing);
                         } else if state == 4 {
-                            self.status = "Paused".into();
+                            self.status = Status::Text(Text::Paused);
                         }
                     }
                     Err(error) => {
                         self.playback_shared = None;
                         self.playback_state = 0;
-                        self.status = error;
+                        self.status = Status::Error(error);
                     }
                 },
                 Response::Thumbnail(generation, path, image)
@@ -874,6 +874,9 @@ impl eframe::App for Browser {
                 ui.label(RichText::new("Diffractor").size(22.0).strong()
                     .color(Color32::from_rgb(220, 237, 244)));
                 ui.separator();
+                if ui.button(self.language.badge()).clicked() {
+                    self.language.toggle();
+                }
                 if ui.button("Up").clicked() {
                     if let Some(parent) = self.folder.parent() {
                         self.open_folder(parent.to_path_buf());
@@ -1098,7 +1101,7 @@ impl eframe::App for Browser {
             } else {
                 ui.heading("Photo preview");
             }
-            ui.label(RichText::new(&self.status).color(Color32::LIGHT_GRAY));
+            ui.label(RichText::new(self.status.display(self.language)).color(Color32::LIGHT_GRAY));
             if self
                 .selected
                 .as_ref()
@@ -1132,7 +1135,7 @@ impl eframe::App for Browser {
                     }
                     if self.playback_shared.is_some() && ui.button("Stop").clicked() {
                         self.stop_playback();
-                        self.status = "Stopped".into();
+                        self.status = Status::Text(Text::Stopped);
                     }
                     if self.playback_duration > 0 {
                         let mut seconds = self.playback_time as f64 / 1000.0;
