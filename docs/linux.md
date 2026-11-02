@@ -90,6 +90,26 @@ cmake --build build
 
 CI definitions remain authoritative for compiler versions and installed system prerequisites.
 
+### Arch Linux
+
+On Arch Linux, `dd setup` uses pacman rather than apt. The package installation
+covers the native compiler/toolchain and the optional system codec headers;
+CMake continues to fetch the project's pinned libraries.
+
+```bash
+git lfs install
+git lfs pull
+bash ./dd setup --check
+bash ./dd setup
+bash ./dd build --config Release
+bash ./dd test --config Release
+```
+
+Run `bash ./dd info` to inspect the detected toolchain and binary path.
+The Linux executable is currently a **headless test binary**, not a functional
+photo viewer; windowing, font rendering, presentation and sound output still
+require a native Linux UI backend. Arch setup does not change this limitation.
+
 Build from a Linux checkout. A Windows checkout with `core.autocrlf` set, built from WSL, gives
 FFmpeg's `configure` CRLF line endings, which `/bin/sh` rejects as "No such file or directory".
 
