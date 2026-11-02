@@ -40,6 +40,7 @@ impl Locale {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Text {
     Up, Open, AddressHint, SearchScope, SearchHint, Search, BackToFolder,
+    HistoryBack, HistoryForward,
     SearchResults, FoldersMedia, EntryLimit, Folder, Audio, MediaDetails,
     EmbeddedDetails, NoDetails, Title, Camera, Lens, Description, Keywords,
     Rating, Rejected, ReadDetailsFailed, PhotoPreview, Pause, Resume, Replay,
@@ -54,6 +55,8 @@ pub fn tr(locale: Locale, key: Text) -> &'static str {
     use Text::*;
     let (ko, en) = match key {
         Up => ("상위 폴더", "Up"),
+        HistoryBack => ("이전 폴더", "Back"),
+        HistoryForward => ("다음 폴더", "Forward"),
         Open => ("열기", "Open"),
         AddressHint => ("파일 또는 폴더 경로", "File or folder path"),
         SearchScope => ("현재 폴더 및 하위 폴더 검색", "Search this folder and subfolders"),
@@ -161,7 +164,8 @@ mod tests {
     fn languages_cover_the_same_semantic_keys_and_statuses() {
         let keys = [
             Text::Up, Text::Open, Text::AddressHint, Text::SearchScope,
-            Text::SearchHint, Text::Search, Text::BackToFolder, Text::SearchResults,
+            Text::SearchHint, Text::Search, Text::BackToFolder,
+            Text::HistoryBack, Text::HistoryForward, Text::SearchResults,
             Text::FoldersMedia, Text::EntryLimit, Text::Folder, Text::Audio,
             Text::MediaDetails, Text::EmbeddedDetails, Text::NoDetails,
             Text::Title, Text::Camera, Text::Lens, Text::Description,
