@@ -48,6 +48,15 @@ impl Selection {
         self.anchor = None;
     }
 
+    /// Explicit file-manager launch may target a valid file beyond the bounded
+    /// folder listing. Keep it as the only target until the scope changes.
+    pub fn set_direct(&mut self, path: PathBuf) {
+        self.paths.clear();
+        self.paths.insert(path.clone());
+        self.focus = Some(path.clone());
+        self.anchor = Some(path);
+    }
+
     pub fn select_all(&mut self, visible: &[PathBuf]) {
         self.paths = visible.iter().cloned().collect();
         if self.focus.as_ref().is_none_or(|path| !self.paths.contains(path)) {
