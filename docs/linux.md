@@ -286,6 +286,24 @@ Preserve original semantics unless a user-approved difference is documented.
   build. **No executed workflow success or Arch GUI evidence is available.**
   The R1 and R2 gates therefore remain unverified.
 
+### Source and evidence pin
+
+- Code checkpoint: `e7d80303dcd58e7fedda0e180b06baa42216986c`
+  (`arch-linux-build`, 2026-11-02). Includes pure Rust selection,
+  source-ordered paired comparison, virtualized grid/list, native fullscreen,
+  history and Korean/English tokens. The original C++ media bridge is retained.
+- Evidence collected here: repository source inspection, cross-file token parity,
+  algorithm/edge-case source tests added, and a Rust CI job specification.
+  **No observed Cargo/Arch GUI success or pixel-parity measurement** is asserted.
+- The [Windows reference screenshot](../screenshot.webp) and the original
+  [Design](design.md), [Zoom](zoom.md) and [Selection Controls](selection-controls.md)
+  govern the next visual alignment pass. Default egui colours, thumbnails and
+  panel geometry are not evidence of visual parity.
+- Remaining blocker for **verification**, not for source-authoring: execute
+  the checked-in Rust CI/local Cargo tests and inspect actual KDE/Wayland
+  output. If checks fail, repair root causes before extending dependent UI
+  features or promoting the draft PR.
+
 ### Current source checkpoint / verification integrity
 
 - Development branch: `arch-linux-build`, Draft
