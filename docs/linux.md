@@ -30,10 +30,14 @@ software frame buffers, system audio output, play/pause and seeking. This is a C
 hardware video presentation and the original player's full feature set are not yet implemented.
 Visible still images and videos receive bounded, in-memory thumbnails on a separate worker; these are
 not yet stored in the application's thumbnail database.
-Still-image previews support Fit, zoom buttons, Ctrl+wheel zoom anchored at the pointer, and drag
-panning. Zoom requests a full-resolution decode on the worker, within the bridge's 256 MiB pixel
-limit and the graphics device's maximum texture size; oversized or unsupported images retain their existing preview. This is a preliminary subset of
-the original zoom model, without its navigator, zoom ladder, or progressive tile decoding.
+Still-image previews now use a Rust source-space zoom model ported from
+`src/model_zoom.h`: Fit (never upscale), the original 19-step 5%–1600% ladder,
+true original-pixel 1:1, source-anchored zoom and edge-clamped panning.
+The worker probes oriented source dimensions separately from the decoded preview,
+so switching to better pixels does not change zoom geometry. Full-resolution
+decode stays within the bridge's 256 MiB pixel limit and GPU texture-size
+cap; unsupported large images retain the preview. The original linked comparison
+zoom, navigator and progressive tiles are not yet implemented.
 The preview accepts a media file or folder as its command-line argument and advertises supported
 media types to desktop file managers. A file argument opens its containing folder and selects the
 file; resolving the path and reading the folder happen on the worker.
@@ -244,7 +248,7 @@ both the Rust UI and C++ index: explicitly identify the authoritative owner.
 | --- | --- | --- |
 | Items folder/media list, focus and multi-select (Design: Selection) | `rust/diffractor-ui/src/main.rs` and `selection.rs` | SOURCE: row and virtualized grid/list selection, plain/Ctrl/Shift/Ctrl+Shift, Ctrl+A, summary read-only; directories still navigate rather than enter a batch selection |
 | Navigation and history (Design: Navigation) | `history.rs`, Rust folder worker | SOURCE: bounded Back/Forward, commit after successful enumeration; query and selection restoration incomplete |
-| Image view and zoom (Zoom) | `main.rs`, C++ libfiles decode bridge | SOURCE: Fit, Ctrl-wheel/drag, full decode; zoom ladder/navigator/1:1/progressive tiles incomplete |
+| Image view and zoom (Zoom) | `zoom.rs`, `main.rs`, C++ libfiles decode bridge | SOURCE: original 19-stop ladder, exact source 1:1, source-based anchor/center/pan; navigator, linked comparison zoom and progressive tiles remain |
 | Original media index and query parser | `diffractor-core`, `platform_linux_index.cpp` | Existing worker, folder-scoped recursive search, local SQLite cache; managed multi-root collections missing |
 | Metadata/sidecars/edit/ratings | `diffractor-core`, future Rust task views and reviewed write plans | Embedded metadata read only; XMP sidecars and writes not connected |
 | Audio/video playback | `video.rs` and original FFmpeg preview | CPU-copy libVLC playback + timeline; native video feature parity/hardware acceleration incomplete |
@@ -304,6 +308,29 @@ Preserve original semantics unless a user-approved difference is documented.
   output. If checks fail, repair root causes before extending dependent UI
   features or promoting the draft PR.
 
+### 2026-11-02 source migration slice — zoom, browser and fast type feedback
+
+- `zoom.rs` now uses the 19 percentages and source-space normalized center
+  from Windows `src/model_zoom.h`. `probe_image` on the existing media worker
+  supplies source dimensions independent of the preview raster. Fit, pointer
+  stepping, 1:1, pan clamps, and texture-swap geometry have checked-in tests.
+  GUI integration retains original decoded-frame generation checks.
+- Windows input paths added in native egui: Enter fullscreen, F11, K details,
+  Space media play/pause, Ctrl+Left/Right extend selected set, Ctrl+Space
+  original-size zoom and 0 Fit. Text editor focus suppresses navigation keys.
+  Ctrl-wheel at Fit is intentionally not consumed by media zoom.
+- `browser_files.rs` now owns Linux case-sensitive file recognition, workers'
+  folder enumeration and open-target validation. A bounded max-heap chooses the
+  deterministic sorted first 10,000 items rather than the arbitrary first
+  10,000 yielded by `read_dir`; folders sort before files.
+- A separate `.github/workflows/rust-native-ui.yml` runs `cargo check --locked
+  --all-targets` for both Rust crates without waiting for the C++ native
+  linker. `.github/workflows/linux.yml` remains the full native test gate.
+- **Validation**: source review and Rust source tests authored only.
+  The review environment has no `cargo`, `rustc` or networked checkout;
+  no actually executed CI run, Arch binary or Wayland GUI validation is
+  asserted. Correct any build diagnostics before promoting the stage.
+
 ### Current source checkpoint / verification integrity
 
 - Development branch: `arch-linux-build`, Draft
@@ -326,11 +353,11 @@ Preserve original semantics unless a user-approved difference is documented.
   Cargo check, unit tests, GUI interaction, reference screenshots and
   performance measurements must remain distinct evidence categories.
 
-Next implementation entry: verify the checked-in selection/grid/fullscreen/
-comparison slice with Cargo and Arch UI runtime, correct any observed regressions,
-then migrate the source-anchored zoom ladder/navigator, original Items layout and
-two-pane comparison metadata. Do not implement destructive operations until the
-reviewed-action backend exists.
+Next implementation entry: run the Rust-only type-check CI (and the complete
+Linux bridge test when available), repair compilation defects and then verify
+selection/grid/fullscreen/zoom/comparison on Arch/KDE. Follow with the source
+navigator, linked two-pane zoom, original Items layout and comparison metadata.
+Do not implement destructive operations until the reviewed-action backend exists.
 
 For the native preview's current compile and interactive check, after building
 the existing Linux bridge as above:
