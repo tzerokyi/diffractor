@@ -1,9 +1,11 @@
+mod browser_files;
 mod history;
 mod locale;
 mod selection;
 mod video;
 mod zoom;
 
+use browser_files::{is_audio, is_image, is_video, list_folder, open_target, Entry};
 use history::{History, Travel, Visit};
 use selection::{Intent, Selection};
 use locale::{tr, Locale, Status, Text};
@@ -26,7 +28,6 @@ use diffractor_core::{
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle};
 
-const MAX_ENTRIES: usize = 10_000;
 const MAX_THUMBNAILS: usize = 96;
 const MAX_THUMBNAIL_PENDING: usize = 48;
 
@@ -37,12 +38,6 @@ fn selection_intent(modifiers: egui::Modifiers) -> Intent {
         (false, true) => Intent::Toggle,
         (false, false) => Intent::Replace,
     }
-}
-
-#[derive(Debug)]
-struct Entry {
-    path: PathBuf,
-    directory: bool,
 }
 
 enum Request {
@@ -107,42 +102,6 @@ fn index_worker_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp/linux-build/diffractor")
 }
 
-fn is_image(path: &Path) -> bool {
-    path.extension().and_then(OsStr::to_str).is_some_and(|ext| {
-        [
-            "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "jxl", "gif", "tif", "tiff",
-            "bmp", "psd", "cr2", "cr3", "nef", "nrw", "arw", "dng", "raf", "orf", "rw2", "pef",
-            "srw", "3fr", "iiq", "erf", "kdc", "mos", "mrw", "x3f",
-        ]
-        .iter()
-        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
-    })
-}
-
-fn is_video(path: &Path) -> bool {
-    path.extension().and_then(OsStr::to_str).is_some_and(|ext| {
-        [
-            "mp4", "m4v", "mov", "mkv", "webm", "avi", "mpg", "mpeg", "m2ts", "mts", "ts", "wmv",
-            "flv", "3gp",
-        ]
-        .iter()
-        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
-    })
-}
-
-fn is_audio(path: &Path) -> bool {
-    path.extension().and_then(OsStr::to_str).is_some_and(|ext| {
-        [
-            "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "aif",
-        ]
-        .iter()
-        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
-    })
-}
-
-// The media list is the browsing order. Directories cannot become preview
-// targets, and reaching the first/last item does not wrap implicitly.
-// Columns are derived from the actual available pane width, not screen width.
 // Selected set order is not image presentation order: the source list order
 // determines the left/right comparison panes and stays stable across refactors.
 fn comparison_paths(visible: &[PathBuf], selection: &Selection) -> Option<(PathBuf, PathBuf)> {
@@ -164,61 +123,6 @@ fn grid_columns(width: f32) -> usize {
         return 1;
     }
     (width.max(0.0) / 146.0).floor().clamp(1.0, 4.0) as usize
-}
-
-fn list_folder(path: &Path) -> Result<(Vec<Entry>, bool), String> {
-    let mut items = Vec::new();
-    let mut truncated = false;
-    let entries = std::fs::read_dir(path).map_err(|e| format!("Cannot open folder: {e}"))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Cannot read folder entry: {e}"))?;
-        let kind = entry
-            .file_type()
-            .map_err(|e| format!("Cannot inspect an entry: {e}"))?;
-        let path = entry.path();
-        // Symlinks may point to folders or files. Resolving them is still worker-side I/O.
-        let directory = if kind.is_symlink() {
-            path.is_dir()
-        } else {
-            kind.is_dir()
-        };
-        if directory || is_image(&path) || is_video(&path) || is_audio(&path) {
-            if items.len() == MAX_ENTRIES {
-                truncated = true;
-                break;
-            }
-            items.push(Entry { path, directory });
-        }
-    }
-    items.sort_by(|a, b| {
-        b.directory
-            .cmp(&a.directory)
-            .then_with(|| a.path.file_name().cmp(&b.path.file_name()))
-    });
-    Ok((items, truncated))
-}
-
-// Resolve on the worker: file-manager arguments may be relative, missing, or symlinks.
-fn open_target(path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|e| format!("Cannot resolve path: {e}"))?
-            .join(path)
-    };
-    let kind = std::fs::metadata(&path).map_err(|e| format!("Cannot open path: {e}"))?;
-    if kind.is_dir() {
-        Ok((path, None))
-    } else if kind.is_file() && (is_image(&path) || is_video(&path) || is_audio(&path)) {
-        let folder = path
-            .parent()
-            .ok_or("File has no parent folder.")?
-            .to_path_buf();
-        Ok((folder, Some(path)))
-    } else {
-        Err("This path is not a supported media file or folder.".into())
-    }
 }
 
 // EXIF orientation is applied once here; libfiles reports 1 for container-transformed images.
