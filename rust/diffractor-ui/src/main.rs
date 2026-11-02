@@ -715,15 +715,19 @@ impl Browser {
             if self.selected.as_ref() != Some(&path) {
                 self.open_image(path);
             }
-        } else if self.selected.is_some() || self.texture.is_some() {
-            self.stop_playback();
-            self.image_generation += 1;
-            self.selected = None;
-            self.texture = None;
-            self.metadata = None;
-            self.video_aspect = None;
-            self.full_image_requested = false;
-            self.status = Status::Empty;
+        } else {
+            if self.selected.is_some() || self.texture.is_some() {
+                self.stop_playback();
+                self.image_generation += 1;
+                self.selected = None;
+                self.texture = None;
+                self.metadata = None;
+                self.video_aspect = None;
+                self.full_image_requested = false;
+            }
+            if self.selection.len() > 1 {
+                self.status = Status::Empty;
+            }
         }
     }
 
@@ -1096,6 +1100,14 @@ impl eframe::App for Browser {
                         .strong(),
                     );
                     ui.label(RichText::new(self.entries.len().to_string()).weak());
+                    if self.selection.len() > 0 {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("{} {}", self.selection.len(),
+                                tr(self.language, Text::SelectedCount)))
+                                .color(Color32::from_rgb(180, 215, 237)),
+                        );
+                    }
                 });
                 if self.truncated {
                     ui.label(tr(self.language, Text::EntryLimit));
@@ -1192,7 +1204,42 @@ impl eframe::App for Browser {
                 self.select_media(path, intent);
             }
         }
-        if let Some(metadata) = &self.metadata {
+        if self.selection.len() > 1 {
+            let images = self.selection.iter().filter(|path| is_image(path)).count();
+            let videos = self.selection.iter().filter(|path| is_video(path)).count();
+            let audio = self.selection.iter().filter(|path| is_audio(path)).count();
+            egui::Panel::right("selection-summary")
+                .resizable(true)
+                .default_size(230.0)
+                .size_range(180.0..=400.0)
+                .show(root, |ui| {
+                    ui.heading(tr(self.language, Text::SelectionSummary));
+                    ui.label(RichText::new(format!("{} {}",
+                        self.selection.len(),
+                        tr(self.language, Text::SelectedCount))).strong());
+                    ui.separator();
+                    if images > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(tr(self.language, Text::Images));
+                            ui.label(images.to_string());
+                        });
+                    }
+                    if videos > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(tr(self.language, Text::Videos));
+                            ui.label(videos.to_string());
+                        });
+                    }
+                    if audio > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(tr(self.language, Text::Audio));
+                            ui.label(audio.to_string());
+                        });
+                    }
+                    ui.add_space(12.0);
+                    ui.label(RichText::new(tr(self.language, Text::BatchUnavailable)).weak());
+                });
+        } else if let Some(metadata) = &self.metadata {
             egui::Panel::right("metadata")
                 .resizable(true)
                 .default_size(230.0)
