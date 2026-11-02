@@ -1002,14 +1002,19 @@ impl eframe::App for Browser {
                                         if media {
                                             needed_thumbnails.push(entry.path.clone());
                                         }
-                                        let text = if entry.directory {
-                                            tr(self.language, Text::Folder)
+                                        // Distinct, low-cost placeholders; no decorative
+                                        // loading animation is needed for every visible row.
+                                        let (symbol, tint, kind) = if entry.directory {
+                                            ("▰", Color32::from_rgb(187, 159, 112),
+                                                tr(self.language, Text::Folder))
                                         } else if is_audio(&entry.path) {
-                                            tr(self.language, Text::Audio)
+                                            ("♫", Color32::from_rgb(127, 184, 193),
+                                                tr(self.language, Text::Audio))
                                         } else {
-                                            ""
+                                            ("▧", Color32::from_rgb(114, 124, 135), "")
                                         };
-                                        ui.label(RichText::new(text).weak());
+                                        ui.label(RichText::new(symbol).size(25.0).color(tint))
+                                            .on_hover_text(kind);
                                     }
                                 },
                             );
