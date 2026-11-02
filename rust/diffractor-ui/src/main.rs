@@ -46,6 +46,7 @@ enum Request {
     Folder(u64, PathBuf),
     OpenPath(u64, PathBuf),
     Image(u64, PathBuf),
+    Metadata(u64, PathBuf),
     FullImage(u64, PathBuf),
 }
 
@@ -61,6 +62,7 @@ enum Response {
         PathBuf,
         Result<(ColorImage, Option<Metadata>, bool), String>,
     ),
+    Metadata(u64, PathBuf, Result<Metadata, String>),
     Search(u64, PathBuf, Result<Vec<PathBuf>, String>),
     FullImage(u64, PathBuf, Result<ColorImage, String>),
     Playback(u64, Result<(i32, i64, i64), String>),
@@ -478,6 +480,13 @@ impl Browser {
                             });
                         Response::Image(id, path, result)
                     }
+                    Request::Metadata(id, path) => {
+                        Response::Metadata(
+                            id,
+                            path.clone(),
+                            read_metadata(&path).map_err(|error| format!("{error:?}")),
+                        )
+                    }
                     Request::FullImage(id, path) => {
                         let result = decode_image(&path, (0, 0))
                             .map(orient)
@@ -659,6 +668,7 @@ impl Browser {
         self.video_aspect = None;
         if is_audio(&path) {
             self.status = Status::Text(Text::AudioReady);
+            let _ = self.sender.send(Request::Metadata(self.image_generation, path));
             return;
         }
         self.status = Status::Text(Text::LoadingImage);
@@ -745,6 +755,11 @@ impl Browser {
                         }
                         Err(error) => self.status = Status::Error(error),
                     }
+                }
+                Response::Metadata(id, path, result)
+                    if id == self.image_generation && self.selected.as_ref() == Some(&path) =>
+                {
+                    self.metadata = result.ok();
                 }
                 Response::FullImage(id, path, result)
                     if id == self.image_generation && self.selected.as_ref() == Some(&path) =>
