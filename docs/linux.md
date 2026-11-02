@@ -201,118 +201,109 @@ how they join the application build.
 - [Arch package template](../packaging/arch/PKGBUILD.in) and
   [snapshot builder](../tools/make_arch_snapshot.sh): the experimental local package workflow.
 
-## Native Product Delivery Plan (2026-11-02)
+## Native Rust Migration — Canonical Plan (2026-11-02)
 
-**Authority:** This section owns the Linux delivery sequence and acceptance criteria.
-[Design](design.md) remains the source for original Diffractor user behavior; this
-document does not redefine file operation, selection, metadata or rendering semantics.
+**Decision (revised by the user on 2026-11-02):** Build a **native Rust/egui
+Diffractor frontend** preserving the Windows application's recognizable UI,
+interaction grammar, and product capabilities. The earlier proposal to finish a
+C++/libdesktop Linux window backend as the final product is **superseded**.
+That route was useful for reducing immediate implementation risk but conflicts
+with the chosen Rust-native frontend goal. Do not revive it as a silent
+substitute for the Rust migration.
 
-### Architectural decision
+Original Windows product semantics remain governed by [Design](design.md),
+[Selection Controls](selection-controls.md), [Zoom](zoom.md),
+[Collections](collections.md), [Metadata](metadata.md), and [File I/O](file-io.md).
+This document owns **migration scope, dependency order and evidence**, not a
+second, conflicting product behavior specification.
 
-Two different targets must not be confused:
+### Runtime ownership and migration boundaries
 
-- **Native preview:** `rust/diffractor-ui` is a deliberately limited, immediate-use
-  local browser built with egui. It consumes the real C++ libfiles/index bridge
-  and native media playback, but has a separate UI state machine. It is valuable
-  as an Arch Linux photo browser and as a test client for the media bridge.
-- **Full Diffractor port:** The Windows application has a much richer retained C++
-  UI and command/state engine. Reimplementing its entire selection, edit, search,
-  sync and navigation model in a second Rust UI would create two product implementations
-  that drift. Full parity therefore targets a Linux native-window, text, input,
-  software-present and audio backend for **libdesktop**, so the existing Diffractor
-  C++ UI and state model can run unchanged wherever possible.
+```text
+Native Linux window (eframe/egui, keyboard, pointer, text, accessibility)
+    → Rust view state (scope, selection/focus/anchor, media, history, commands)
+    → diffractor-core (safe Rust API; path/ownership, errors and generations)
+    → bounded C ABI: libfiles/FFmpeg/index/search/metadata (existing C++ code)
+    → filesystem / local media / SQLite (authoritative media+sidecars, cache index)
+```
 
-The Rust preview may ship first as a clearly identified preview, but it is
-**not** to be labeled the complete port. The remaining Linux backend lives in
-the separately version-pinned libdesktop dependency: build/pin an explicitly
-controlled fork or submit upstream changes, rather than silently patching a
-downloaded dependency. Hardware acceleration follows software correctness,
-not the other way around.
+This is a staged **Rust-native UI with a C++ media core**, not yet a Rust-only
+application. Retain the working C++ core temporarily; replace C++ modules only
+when a Rust implementation is justified by measured benefit and preserved
+semantics. No browser runtime, Tauri wrapper, or duplicate C++ Linux window UI.
+Do not conflate a functioning media bridge with Windows feature parity.
 
-### Native preview interaction contract
+Crossing the bridge must preserve error identity, thread ownership, bounded
+decode buffers, cancellation, Linux case-sensitive path identity and metadata
+write/recovery semantics. Domain state must not be invented independently in
+both the Rust UI and C++ index: explicitly identify the authoritative owner.
 
-- One browsing scope at a time; changing a folder cancels stale searches,
-  image work and thumbnails. Directory navigation never changes user files.
-- The full row, image and text are viable click targets; selection has a
-  visible background, remains distinct from hover and contains the media
-  whose metadata and preview are displayed.
-- Previous/next media ignore directory entries and stop at scope edges.
-  Arrow navigation never captures keys from focused text editors.
-- Image zoom/drag remains clamped to the viewport; video is centered
-  at its natural aspect; neither reveals an image outside its bounds.
-- Korean and English UI copy use typed semantic tokens. Locale changes
-  immediately without mutating domain state; native OS/decoder diagnostics
-  may retain their original message until diagnostic localization is added.
-- Media decode, probing, searches and folder enumeration remain off the
-  egui UI thread. Existing memory limits and generation checks are invariants.
-- Expose missing capabilities honestly. No dummy success for editing,
-  sharing, undo, multi-root collection management or shell integration.
+### Migration correspondence (source → native)
 
-### Phases and gates
-
-| Phase | Deliverable | Observable acceptance |
+| Windows source/contract | Rust owner | Current migration evidence |
 | --- | --- | --- |
-| L1 — Native preview UX | Consistent palette, row target/selection, arrows and previous/next buttons, centered video, live ko/en copy; audio metadata | A normal media folder can be browsed without misleading selection or layout; switching language preserves selected path/zoom/play state |
-| L2 — Preview robustness | Keyboard navigation in long lists, responsive panels, per-folder navigation history, scroll continuity, durable thumbnails, failed/offline media feedback | Thousands of mixed files do not hang the UI; moving across/searching folders keeps correct focus and no stale preview |
-| L3 — C++ UI foundation | libdesktop Linux window/event loop, font fallback/shaping, HiDPI, clipboard/drag-drop, native dialogs, software rasterizer present, PipeWire/PulseAudio output | Existing C++ Items view opens on X11 and Wayland, with keyboard/mouse/text, resize, image display and bounded memory |
-| L4 — Original behavior parity | Wire existing app commands, collection model, full screen/zoom, metadata, edit, batch plans and recoverable file operations to Linux services | Original cross-platform [Design](design.md) interactions and review-before-write semantics pass Linux parity cases; no duplicate Rust behavior model |
-| L5 — Runtime and distribution | Crash recovery, codec tests, sandbox boundaries, ICC/rotation and mixed-DPI visual parity, Arch PKGBUILD and desktop integration | Successful local Debug/Release builds and GUI smoke check, reproducible package, correct source/relinking notices, no unverified success statements |
+| Items folder/media list, focus and multi-select (Design: Selection) | `rust/diffractor-ui/src/main.rs` and `selection.rs` | SOURCE: row selection, plain/Ctrl/Shift/Ctrl+Shift, Ctrl+A, summary read-only; directories still navigate rather than enter a batch selection |
+| Navigation and history (Design: Navigation) | `history.rs`, Rust folder worker | SOURCE: bounded Back/Forward, commit after successful enumeration; query and selection restoration incomplete |
+| Image view and zoom (Zoom) | `main.rs`, C++ libfiles decode bridge | SOURCE: Fit, Ctrl-wheel/drag, full decode; zoom ladder/navigator/1:1/progressive tiles incomplete |
+| Original media index and query parser | `diffractor-core`, `platform_linux_index.cpp` | Existing worker, folder-scoped recursive search, local SQLite cache; managed multi-root collections missing |
+| Metadata/sidecars/edit/ratings | `diffractor-core`, future Rust task views and reviewed write plans | Embedded metadata read only; XMP sidecars and writes not connected |
+| Audio/video playback | `video.rs` and original FFmpeg preview | CPU-copy libVLC playback + timeline; native video feature parity/hardware acceleration incomplete |
+| Fullscreen, comparison, import/sync and batch file operations | Pending Rust view modules and existing C++ model contracts | Not implemented in native Rust; not allowed as dummy controls |
+| Localization and original visual identity | `locale.rs` and native style components | Typed Korean/English tokens, graphite theme; original iconography/geometry and broader language coverage incomplete |
 
-**Dependency order:** L1 → L2 for the near-term Rust preview; L3 → L4 → L5
-for full native product. L3 can proceed independently of L2; polish of the
-preview must not delay platform parity. Re-evaluate retention of the Rust UI
-after the original C++ Items view is functional, to avoid indefinitely
-maintaining two competing frontends.
+### Functional phases
 
-### Review checklist / evidence
+| Phase | Native deliverable and dependency | Acceptance gate |
+| --- | --- | --- |
+| R1 — Input and selection fidelity | Establish Rust focus/anchor/selected-target model, genuine row selection, keyboard modifiers, history, responsive status, i18n and basic media view | Source tests for Ctrl/Shift/range/filter/failed navigation; local compile and actual pointer/keyboard GUI validation required for VERIFIED |
+| R2 — Original Items + Fullscreen | Native thumbnail grid/details, scrolling and focus continuity, original column/panel geometry, source-anchored zoom ladder/navigator, full-window mode, two-media comparison | Side-by-side Windows/Rust reference screenshots and interaction path coverage including awkward sizes and DPI |
+| R3 — Search and collections | Managed multi-root collection state, scope/filter/group/sort semantics, original indexed search parser, duplicate/presence/related items through Rust APIs | Reopen index without loss; query/selection retention and stale-worker tests; no UI-thread I/O |
+| R4 — Metadata and guided operations | Tags, ratings, sidecars, editing, rename/import/sync/convert with review/skip/collision/recovery semantics | Real files and sidecars roundtrip, cancellation and overwrite collision cases; no unreviewed destructive effect |
+| R5 — Desktop parity and distribution | Native dialogs, clipboard/drop, associations, media playback/colour fidelity, Arch package, runtime/visual/performance polish | X11/Wayland launch, Korean typography/IME, GPU failure/fallback, bounded memory, observed Arch QA and license/relinking review |
 
-The original Linux headless build and tests are documented above. The native
-preview's functional source is currently on `arch-linux-build`, not `master`.
-Code inspection confirms that the UI has generation-checked worker responses
-and that the L1 controls are wired. **No runtime GUI screenshot, local Arch
-compile, Wayland/X11 behavior or human parity check is claimed by this review.**
-Before promoting any milestone to a verified baseline, record the tested
-commit, exact command, outcome and any visual/regression evidence here.
+**Critical path:** R1 → R2 → R3 → R4 → R5. Small adjacent
+features may be implemented earlier when they complete an end-to-end slice.
+After each phase, consolidate its modules without speculatively mirroring the
+Windows class hierarchy. Native UI state and UX decisions are owned in Rust.
+Preserve original semantics unless a user-approved difference is documented.
 
-**Known limits:** no original app-window frontend on Linux; optional library
-headers and system fonts affect native preview operation; large RAW/HDR and
-HEIF cases still need real-display review; XMP and non-destructive edit workflows
-are not present in the Rust frontend. Do not report L3–L5 as complete merely
-because the headless portable suite passes.
+### Current source checkpoint / verification integrity
 
-### 2026-11-02 source checkpoint — native preview
+- Development branch: `arch-linux-build`, Draft
+  [PR #1](https://github.com/tzerokyi/diffractor/pull/1). The Windows
+  `master` C++ app remains intact.
+- Read-only media selection uses a source-derived Rust `Selection` state
+  (focus, anchor, selected file targets) and handles plain/Ctrl/Shift/Ctrl+Shift,
+  keyboard ranges and Ctrl+A. Selection summary counts media types without
+  pretending that batch editing is available. A direct file-manager launch
+  can select a file outside the 10,000-entry list cap.
+- Existing code still uses the presentation-specific `Browser.selected`
+  path for a single displayed item. **It is not the selected batch target.**
+  The `Selection` model owns selected paths; action targeting must read from
+  it and must not infer selected files from the preview image.
+- Source-level regression functions cover selection grammar, navigation and
+  image orientation; **they have not been executed here**. Tool access in this
+  session permits source review and commits but not a local Rust/Arch build.
+- No VERIFIED L1/R1 runtime baseline is claimed. Static source inspection,
+  Cargo check, unit tests, GUI interaction, reference screenshots and
+  performance measurements must remain distinct evidence categories.
 
-- Code snapshot reviewed: `eef23c3aa1d5b9a0871f3423127b03815625cf8d` on
-  `arch-linux-build`. Review changes are kept in
-  [draft PR #1](https://github.com/tzerokyi/diffractor/pull/1).
-- **STATIC:** Semantic catalog has 58 keys and 58 translation arms, with no
-  unresolved `Text::` references. History restoration and media-edge
-  navigation have isolated regression tests checked into source; they have
-  **not** been executed in this session.
-- UI improvements wired: selected/clickable media rows; keyboard and
-  previous/next navigation; localized controls and status; audio details and
-  centered audio stage; centered paused/playing video; responsive toolbar.
-- State correction: only successful folder enumeration commits the new
-  browser state. A failed open keeps prior selection and playback intact.
-  Pending navigation blocks outdated media requests from superseding its
-  folder worker request. Back/Forward history is bounded to 100 folder
-  visits, with file selection restored when still present.
-- The behavior is **source-reviewed, not a GUI-verified baseline**.
-  Local `cargo`, `rustc` and `rustfmt` were unavailable in the
-  review environment, and no Arch/Wayland/X11 runtime check was made.
-  L1 and L2 are not declared complete until actual GUI build and user-visible
-  checks confirm them; L3–L5 are unimplemented.
+Next implementation entry: port the Windows Items thumbnail grid/scrolling,
+selected-set comparison and source-anchored zoom model into native Rust modules,
+using the original view and command contracts as the reference. Do not
+implement destructive operations until the reviewed-action backend exists.
 
-For the next native preview verification, after building the Linux bridge
-with the commands above, run in the same checkout:
+For the native preview's current compile and interactive check, after building
+the existing Linux bridge as above:
 
 ```bash
 LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  cargo test --manifest-path rust/diffractor-ui/Cargo.toml
+  cargo test --manifest-path rust/diffractor-ui/Cargo.toml --locked
 LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  cargo run --manifest-path rust/diffractor-ui/Cargo.toml -- "$HOME/Pictures"
+  cargo run --manifest-path rust/diffractor-ui/Cargo.toml --locked -- "$HOME/Pictures"
 ```
 
-Check Korean/English switching, row selection, folder Back/Forward including
-missing folders, photo zoom and RAW orientation, video centering at rest and
-during playback, audio details and ordinary media keyboard navigation.
+For feedback of reusable scope, update
+[SKILLS rustify](https://github.com/tzerokyi/SKILLS/blob/main/skills/rustify/SKILL.md)
+or its [native UI migration reference](https://github.com/tzerokyi/SKILLS/blob/main/skills/rustify/references/native-ui-ports.md).
+This file remains the **single Diffractor-specific** current-state/migration ledger.
