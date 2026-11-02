@@ -1125,6 +1125,17 @@ impl eframe::App for Browser {
                 self.toggle_fullscreen(&ctx);
             } else if ctx.input(|input| input.key_pressed(egui::Key::K)) {
                 self.show_details = !self.show_details;
+            } else if ctx.input(|input|
+                input.modifiers.ctrl && input.key_pressed(egui::Key::Space)) {
+                if self.selected.as_ref().is_some_and(|path| is_image(path)) {
+                    if let Some(source) = self.source_extent {
+                        let viewport = self.last_viewport.max(egui::Vec2::ONE);
+                        self.zoom.actual_pixels(source, viewport);
+                    }
+                }
+            } else if ctx.input(|input| input.key_pressed(egui::Key::Num0)
+                && !input.modifiers.ctrl && !input.modifiers.alt) {
+                self.zoom.fit();
             } else if ctx.input(|input| input.key_pressed(egui::Key::Space)
                 && !input.modifiers.shift && !input.modifiers.ctrl) {
                 self.toggle_playback(&ctx);
