@@ -153,6 +153,22 @@ fn is_audio(path: &Path) -> bool {
 // The media list is the browsing order. Directories cannot become preview
 // targets, and reaching the first/last item does not wrap implicitly.
 // Columns are derived from the actual available pane width, not screen width.
+// Selected set order is not image presentation order: the source list order
+// determines the left/right comparison panes and stays stable across refactors.
+fn comparison_paths(visible: &[PathBuf], selection: &Selection) -> Option<(PathBuf, PathBuf)> {
+    if selection.len() != 2 {
+        return None;
+    }
+    let mut paths = visible.iter().filter(|path| selection.contains(path));
+    let left = paths.next()?;
+    let right = paths.next()?;
+    if is_image(left) && is_image(right) {
+        Some((left.clone(), right.clone()))
+    } else {
+        None
+    }
+}
+
 fn grid_columns(width: f32) -> usize {
     if !width.is_finite() {
         return 1;
@@ -740,19 +756,7 @@ impl Browser {
     }
 
     fn comparison_pair(&self) -> Option<(PathBuf, PathBuf)> {
-        if self.selection.len() != 2 {
-            return None;
-        }
-        // Use visible browse order, not lexical BTreeSet order. This preserves
-        // the Windows user's context when comparing two adjacent photographs.
-        let mut paths = self.visible_media.iter().filter(|path| self.selection.contains(path));
-        let left = paths.next()?;
-        let right = paths.next()?;
-        if is_image(left) && is_image(right) {
-            Some((left.clone(), right.clone()))
-        } else {
-            None
-        }
+        comparison_paths(&self.visible_media, &self.selection)
     }
 
     fn present_selection(&mut self) {
@@ -1769,6 +1773,22 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn image_comparison_preserves_browse_order_not_set_order() {
+        let visible: Vec<PathBuf> = ["z.jpg", "folder/ignore.mp4", "a.png"]
+            .into_iter().map(PathBuf::from).collect();
+        let mut selection = Selection::default();
+        selection.apply(&visible, &visible[0], Intent::Replace);
+        selection.apply(&visible, &visible[2], Intent::Toggle);
+        assert_eq!(
+            comparison_paths(&visible, &selection),
+            Some((visible[0].clone(), visible[2].clone())),
+        );
+        selection.apply(&visible, &visible[1], Intent::Replace);
+        selection.apply(&visible, &visible[2], Intent::Toggle);
+        assert_eq!(comparison_paths(&visible, &selection), None);
+    }
+
     #[test]
     fn grid_columns_follow_actual_pane_width() {
         assert_eq!(grid_columns(0.0), 1);
