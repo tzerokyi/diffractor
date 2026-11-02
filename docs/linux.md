@@ -242,13 +242,13 @@ both the Rust UI and C++ index: explicitly identify the authoritative owner.
 
 | Windows source/contract | Rust owner | Current migration evidence |
 | --- | --- | --- |
-| Items folder/media list, focus and multi-select (Design: Selection) | `rust/diffractor-ui/src/main.rs` and `selection.rs` | SOURCE: row selection, plain/Ctrl/Shift/Ctrl+Shift, Ctrl+A, summary read-only; directories still navigate rather than enter a batch selection |
+| Items folder/media list, focus and multi-select (Design: Selection) | `rust/diffractor-ui/src/main.rs` and `selection.rs` | SOURCE: row and virtualized grid/list selection, plain/Ctrl/Shift/Ctrl+Shift, Ctrl+A, summary read-only; directories still navigate rather than enter a batch selection |
 | Navigation and history (Design: Navigation) | `history.rs`, Rust folder worker | SOURCE: bounded Back/Forward, commit after successful enumeration; query and selection restoration incomplete |
 | Image view and zoom (Zoom) | `main.rs`, C++ libfiles decode bridge | SOURCE: Fit, Ctrl-wheel/drag, full decode; zoom ladder/navigator/1:1/progressive tiles incomplete |
 | Original media index and query parser | `diffractor-core`, `platform_linux_index.cpp` | Existing worker, folder-scoped recursive search, local SQLite cache; managed multi-root collections missing |
 | Metadata/sidecars/edit/ratings | `diffractor-core`, future Rust task views and reviewed write plans | Embedded metadata read only; XMP sidecars and writes not connected |
 | Audio/video playback | `video.rs` and original FFmpeg preview | CPU-copy libVLC playback + timeline; native video feature parity/hardware acceleration incomplete |
-| Fullscreen, comparison, import/sync and batch file operations | Pending Rust view modules and existing C++ model contracts | Not implemented in native Rust; not allowed as dummy controls |
+| Fullscreen, comparison, import/sync and batch file operations | Rust `main.rs` native view and future task modules | SOURCE: F11 fullscreen, Esc zoom-before-exit, two-photo source-ordered comparison with decoded frames; import/sync/batch file writes still not ported |
 | Localization and original visual identity | `locale.rs` and native style components | Typed Korean/English tokens, graphite theme; original iconography/geometry and broader language coverage incomplete |
 
 ### Functional phases
@@ -267,6 +267,25 @@ After each phase, consolidate its modules without speculatively mirroring the
 Windows class hierarchy. Native UI state and UX decisions are owned in Rust.
 Preserve original semantics unless a user-approved difference is documented.
 
+### 2026-11-02 migration feedback and source slices
+
+- **R1** source: native selection owns the complete batch target; the single
+  displayed-media handle is not a command target. Ctrl+Shift additive range
+  and native folder-history shortcuts are wired. Two selections no longer
+  imply a safe editing command.
+- **R2 (partial)** source: selectable virtualized thumbnail grid/list, F11
+  fullscreen with Esc leaving magnification first, and image/image comparison
+  in browse order using a bounded dual decode request. The renderer uses two
+  fitted panes, not the original linked zoom/metadata comparison contract yet.
+- **Important counterexample:** a lexical selected-file set cannot determine
+  the left/right presentation order. The visual order comes from the current
+  browsing scope; a `comparison_paths` unit case now asserts this. General
+  migration feedback lives in `SKILLS/rustify` rather than duplicating the
+  procedure here.
+- Linux Release CI was extended to run Rust-core/frontend tests after the C++
+  build. **No executed workflow success or Arch GUI evidence is available.**
+  The R1 and R2 gates therefore remain unverified.
+
 ### Current source checkpoint / verification integrity
 
 - Development branch: `arch-linux-build`, Draft
@@ -281,17 +300,19 @@ Preserve original semantics unless a user-approved difference is documented.
   path for a single displayed item. **It is not the selected batch target.**
   The `Selection` model owns selected paths; action targeting must read from
   it and must not infer selected files from the preview image.
-- Source-level regression functions cover selection grammar, navigation and
-  image orientation; **they have not been executed here**. Tool access in this
+- Source-level regression functions cover selection grammar, comparison pair
+  ordering and type eligibility, virtual grid columns, navigation and image
+  orientation; **they have not been executed here**. Tool access in this
   session permits source review and commits but not a local Rust/Arch build.
 - No VERIFIED L1/R1 runtime baseline is claimed. Static source inspection,
   Cargo check, unit tests, GUI interaction, reference screenshots and
   performance measurements must remain distinct evidence categories.
 
-Next implementation entry: port the Windows Items thumbnail grid/scrolling,
-selected-set comparison and source-anchored zoom model into native Rust modules,
-using the original view and command contracts as the reference. Do not
-implement destructive operations until the reviewed-action backend exists.
+Next implementation entry: verify the checked-in selection/grid/fullscreen/
+comparison slice with Cargo and Arch UI runtime, correct any observed regressions,
+then migrate the source-anchored zoom ladder/navigator, original Items layout and
+two-pane comparison metadata. Do not implement destructive operations until the
+reviewed-action backend exists.
 
 For the native preview's current compile and interactive check, after building
 the existing Linux bridge as above:
