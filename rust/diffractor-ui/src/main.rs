@@ -877,34 +877,34 @@ impl eframe::App for Browser {
                 if ui.button(self.language.badge()).clicked() {
                     self.language.toggle();
                 }
-                if ui.button("Up").clicked() {
+                if ui.button(tr(self.language, Text::Up)).clicked() {
                     if let Some(parent) = self.folder.parent() {
                         self.open_folder(parent.to_path_buf());
                     }
                 }
                 let edit = ui.add_sized(
                     [(ui.available_width() - 65.0).max(100.0), 28.0],
-                    egui::TextEdit::singleline(&mut self.address).hint_text("File or folder path"),
+                    egui::TextEdit::singleline(&mut self.address).hint_text(tr(self.language, Text::AddressHint)),
                 );
                 if (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    || ui.button("Open").clicked()
+                    || ui.button(tr(self.language, Text::Open)).clicked()
                 {
                     self.open_path(PathBuf::from(self.address.clone()));
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Search this folder and subfolders");
+                ui.label(tr(self.language, Text::SearchScope));
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.search_text)
-                        .hint_text("Tags, text, or search terms"),
+                        .hint_text(tr(self.language, Text::SearchHint)),
                 );
                 if (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    || ui.button("Search").clicked()
+                    || ui.button(tr(self.language, Text::Search)).clicked()
                 {
                     self.search();
                 }
                 if (self.search_active || self.search_pending)
-                    && ui.button("Back to folder").clicked()
+                    && ui.button(tr(self.language, Text::BackToFolder)).clicked()
                 {
                     self.open_folder(self.folder.clone());
                 }
@@ -920,16 +920,16 @@ impl eframe::App for Browser {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(if self.search_active {
-                            "Search results"
+                            tr(self.language, Text::SearchResults)
                         } else {
-                            "Folders & media"
+                            tr(self.language, Text::FoldersMedia)
                         })
                         .strong(),
                     );
                     ui.label(RichText::new(self.entries.len().to_string()).weak());
                 });
                 if self.truncated {
-                    ui.label("Showing first 10,000 entries.");
+                    ui.label(tr(self.language, Text::EntryLimit));
                 }
                 ui.separator();
                 egui::ScrollArea::vertical().show_rows(ui, 56.0, self.entries.len(), |ui, rows| {
@@ -977,9 +977,9 @@ impl eframe::App for Browser {
                                             needed_thumbnails.push(entry.path.clone());
                                         }
                                         let text = if entry.directory {
-                                            "Folder"
+                                            tr(self.language, Text::Folder)
                                         } else if is_audio(&entry.path) {
-                                            "Audio"
+                                            tr(self.language, Text::Audio)
                                         } else {
                                             ""
                                         };
@@ -1024,12 +1024,12 @@ impl eframe::App for Browser {
                 .default_size(230.0)
                 .size_range(180.0..=400.0)
                 .show(root, |ui| {
-                    ui.label(RichText::new("Media details").strong());
-                    ui.label(RichText::new("Embedded metadata").weak());
+                    ui.label(RichText::new(tr(self.language, Text::MediaDetails)).strong());
+                    ui.label(RichText::new(tr(self.language, Text::EmbeddedDetails)).weak());
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         if *metadata == Metadata::default() {
-                            ui.label("No embedded details found.");
+                            ui.label(tr(self.language, Text::NoDetails));
                         }
                         let camera = if metadata.camera_model.is_empty() {
                             &metadata.camera_make
@@ -1037,11 +1037,11 @@ impl eframe::App for Browser {
                             &metadata.camera_model
                         };
                         for (label, value) in [
-                            ("Title", &metadata.title),
-                            ("Camera", camera),
-                            ("Lens", &metadata.lens),
-                            ("Description", &metadata.description),
-                            ("Keywords", &metadata.keywords),
+                            (tr(self.language, Text::Title), &metadata.title),
+                            (tr(self.language, Text::Camera), camera),
+                            (tr(self.language, Text::Lens), &metadata.lens),
+                            (tr(self.language, Text::Description), &metadata.description),
+                            (tr(self.language, Text::Keywords), &metadata.keywords),
                         ] {
                             if !value.is_empty() {
                                 ui.label(RichText::new(label).weak());
@@ -1050,9 +1050,9 @@ impl eframe::App for Browser {
                             }
                         }
                         if let Some(rating) = metadata.rating {
-                            ui.label(RichText::new("Rating").weak());
+                            ui.label(RichText::new(tr(self.language, Text::Rating)).weak());
                             ui.label(if rating == -1 {
-                                "Rejected".to_owned()
+                                tr(self.language, Text::Rejected).to_owned()
                             } else {
                                 format!("{rating} / 5")
                             });
@@ -1063,8 +1063,8 @@ impl eframe::App for Browser {
             egui::Panel::right("metadata-error")
                 .default_size(230.0)
                 .show(root, |ui| {
-                    ui.label(RichText::new("Media details").strong());
-                    ui.label("Could not read embedded details.");
+                    ui.label(RichText::new(tr(self.language, Text::MediaDetails)).strong());
+                    ui.label(tr(self.language, Text::ReadDetailsFailed));
                 });
         }
         if let Some(frame) = self
@@ -1090,16 +1090,16 @@ impl eframe::App for Browser {
                 path.file_name().unwrap_or_default().to_string_lossy().into_owned()
             }) {
                 ui.horizontal(|ui| {
-                    if ui.button("‹").on_hover_text("Previous media (←)").clicked() {
+                    if ui.button("‹").on_hover_text(tr(self.language, Text::Previous)).clicked() {
                         self.step_media(-1);
                     }
-                    if ui.button("›").on_hover_text("Next media (→)").clicked() {
+                    if ui.button("›").on_hover_text(tr(self.language, Text::Next)).clicked() {
                         self.step_media(1);
                     }
                     ui.label(RichText::new(file_name).strong().size(17.0));
                 });
             } else {
-                ui.heading("Photo preview");
+                ui.heading(tr(self.language, Text::PhotoPreview));
             }
             ui.label(RichText::new(self.status.display(self.language)).color(Color32::LIGHT_GRAY));
             if self
@@ -1109,13 +1109,13 @@ impl eframe::App for Browser {
             {
                 ui.horizontal(|ui| {
                     let label = if self.playback_state == 3 {
-                        "Pause"
+                        tr(self.language, Text::Pause)
                     } else if self.playback_state == 4 {
-                        "Resume"
+                        tr(self.language, Text::Resume)
                     } else if self.playback_state == 6 {
-                        "Replay"
+                        tr(self.language, Text::Replay)
                     } else {
-                        "Play"
+                        tr(self.language, Text::Play)
                     };
                     if ui
                         .add_enabled(
@@ -1133,7 +1133,7 @@ impl eframe::App for Browser {
                             self.start_playback(&ctx);
                         }
                     }
-                    if self.playback_shared.is_some() && ui.button("Stop").clicked() {
+                    if self.playback_shared.is_some() && ui.button(tr(self.language, Text::Stop)).clicked() {
                         self.stop_playback();
                         self.status = Status::Text(Text::Stopped);
                     }
@@ -1163,19 +1163,19 @@ impl eframe::App for Browser {
             let mut zoom_factor = 1.0;
             if still_image && self.texture.is_some() {
                 ui.horizontal(|ui| {
-                    if ui.button("−").on_hover_text("Zoom out").clicked() {
+                    if ui.button("−").on_hover_text(tr(self.language, Text::ZoomOut)).clicked() {
                         zoom_factor = 1.0 / 1.25;
                     }
-                    if ui.button("+").on_hover_text("Zoom in").clicked() {
+                    if ui.button("+").on_hover_text(tr(self.language, Text::ZoomIn)).clicked() {
                         zoom_factor = 1.25;
                     }
-                    if ui.button("Fit").clicked() {
+                    if ui.button(tr(self.language, Text::Fit)).clicked() {
                         self.zoom = 1.0;
                         self.pan = egui::Vec2::ZERO;
                     }
-                    ui.label(format!("{:.0}% of fit", self.zoom * 100.0));
+                    ui.label(format!("{:.0}% {}", self.zoom * 100.0, tr(self.language, Text::OfFit)));
                     ui.label(
-                        RichText::new("Ctrl + scroll to zoom · drag to pan")
+                        RichText::new(tr(self.language, Text::ZoomHelp))
                             .small()
                             .color(Color32::GRAY),
                     );
