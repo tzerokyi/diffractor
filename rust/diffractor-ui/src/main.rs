@@ -936,6 +936,23 @@ impl Browser {
                         Err(error) => self.status = Status::Error(error),
                     }
                 }
+                Response::Compare(id, left, right, result)
+                    if id == self.image_generation && !self.folder_open_pending =>
+                {
+                    if self.comparison_pair().as_ref() != Some(&(left, right)) {
+                        continue;
+                    }
+                    match result {
+                        Ok((first, second)) => {
+                            self.comparison = Some(Comparison {
+                                left: ctx.load_texture("compare-left", first, egui::TextureOptions::LINEAR),
+                                right: ctx.load_texture("compare-right", second, egui::TextureOptions::LINEAR),
+                            });
+                            self.status = Status::Text(Text::Comparing);
+                        }
+                        Err(error) => self.status = Status::Error(error),
+                    }
+                }
                 Response::Metadata(id, path, result)
                     if id == self.image_generation && self.selected.as_ref() == Some(&path) =>
                 {
@@ -1504,6 +1521,8 @@ impl eframe::App for Browser {
                     }
                     ui.label(RichText::new(file_name).strong().size(17.0));
                 });
+            } else if self.comparison.is_some() {
+                ui.heading(tr(self.language, Text::Compare));
             } else if self.selection.len() > 1 {
                 ui.heading(tr(self.language, Text::SelectionSummary));
             } else {
@@ -1590,7 +1609,33 @@ impl eframe::App for Browser {
                 });
             }
             ui.add_space(12.0);
-            if let Some(texture) = self.texture.clone() {
+            if let Some(compare) = &self.comparison {
+                let available = ui.available_size().max(egui::Vec2::ZERO);
+                let (viewport, _) = ui.allocate_exact_size(available, egui::Sense::hover());
+                let gap = 12.0;
+                let pane_width = ((viewport.width() - gap) * 0.5).max(0.0);
+                let left_rect = egui::Rect::from_min_size(
+                    viewport.min, egui::vec2(pane_width, viewport.height()));
+                let right_rect = egui::Rect::from_min_size(
+                    egui::pos2(viewport.min.x + pane_width + gap, viewport.min.y),
+                    egui::vec2(pane_width, viewport.height()));
+                for (texture, bounds) in [(&compare.left, left_rect), (&compare.right, right_rect)] {
+                    let size = texture.size_vec2();
+                    if size.x <= 0.0 || size.y <= 0.0 {
+                        continue;
+                    }
+                    let scale = (bounds.width() / size.x).min(bounds.height() / size.y).max(0.0);
+                    let rect = egui::Rect::from_center_size(bounds.center(), size * scale);
+                    ui.painter_at(viewport).image(
+                        texture.id(),
+                        rect,
+                        egui::Rect::from_min_max(
+                            egui::Pos2::ZERO, egui::pos2(1.0, 1.0),
+                        ),
+                        Color32::WHITE,
+                    );
+                }
+            } else if let Some(texture) = self.texture.clone() {
                 let available = ui.available_size();
                 // Keep a stopped video centered too; the preview and player share
                 // the same aspect-driven media stage.
