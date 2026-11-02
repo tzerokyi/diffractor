@@ -303,6 +303,7 @@ struct Browser {
     visible_media: Vec<PathBuf>,
     grid_view: bool,
     fullscreen: bool,
+    show_details: bool,
     texture: Option<TextureHandle>,
     zoom: Zoom,
     source_extent: Option<egui::Vec2>,
@@ -584,6 +585,7 @@ impl Browser {
             visible_media: Vec::new(),
             grid_view: true,
             fullscreen: false,
+            show_details: true,
             texture: None,
             zoom: Zoom::default(),
             source_extent: None,
@@ -834,6 +836,21 @@ impl Browser {
             path,
             shared,
         ));
+    }
+
+    fn toggle_playback(&mut self, ctx: &egui::Context) {
+        if !self.selected.as_ref().is_some_and(|path| is_video(path) || is_audio(path))
+            || matches!(self.playback_state, 1 | 2) {
+            return;
+        }
+        if matches!(self.playback_state, 3 | 4) {
+            let _ = self.playback_sender.send(PlaybackRequest::Pause(
+                self.playback_generation,
+                self.playback_state == 3,
+            ));
+        } else {
+            self.start_playback(ctx);
+        }
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
@@ -1097,6 +1114,19 @@ impl eframe::App for Browser {
                 }
             }
         }
+        // Mirror the original Windows command grammar without intercepting
+        // path, search or other active editors.
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|input| input.key_pressed(egui::Key::Enter))
+                && self.selected.is_some() && !self.fullscreen {
+                self.toggle_fullscreen(&ctx);
+            } else if ctx.input(|input| input.key_pressed(egui::Key::K)) {
+                self.show_details = !self.show_details;
+            } else if ctx.input(|input| input.key_pressed(egui::Key::Space)
+                && !input.modifiers.shift && !input.modifiers.ctrl) {
+                self.toggle_playback(&ctx);
+            }
+        }
         // Never steal arrow keys from path/search edits or focused media controls.
         if !ctx.wants_keyboard_input() && !self.folder_open_pending {
             let (back, forward, up, all, next, previous, extend) = ctx.input(|input| {
@@ -1106,9 +1136,9 @@ impl eframe::App for Browser {
                     mods.alt && input.key_pressed(egui::Key::ArrowRight),
                     mods.alt && input.key_pressed(egui::Key::ArrowUp),
                     mods.command && input.key_pressed(egui::Key::A),
-                    !mods.alt && !mods.command && input.key_pressed(egui::Key::ArrowRight),
-                    !mods.alt && !mods.command && input.key_pressed(egui::Key::ArrowLeft),
-                    mods.shift,
+                    !mods.alt && input.key_pressed(egui::Key::ArrowRight),
+                    !mods.alt && input.key_pressed(egui::Key::ArrowLeft),
+                    mods.shift || mods.ctrl,
                 )
             });
             if back {
@@ -1401,7 +1431,7 @@ impl eframe::App for Browser {
                 self.select_media(path, intent);
             }
         }
-        if self.selection.len() > 1 {
+        if self.show_details && self.selection.len() > 1 {
             let images = self.selection.iter().filter(|path| is_image(path)).count();
             let videos = self.selection.iter().filter(|path| is_video(path)).count();
             let audio = self.selection.iter().filter(|path| is_audio(path)).count();
@@ -1436,7 +1466,8 @@ impl eframe::App for Browser {
                     ui.add_space(12.0);
                     ui.label(RichText::new(tr(self.language, Text::BatchUnavailable)).weak());
                 });
-        } else if let Some(metadata) = &self.metadata {
+        } else if self.show_details && self.metadata.is_some() {
+            let metadata = self.metadata.as_ref().expect("checked metadata presence");
             egui::Panel::right("metadata")
                 .resizable(true)
                 .default_size(230.0)
@@ -1477,7 +1508,7 @@ impl eframe::App for Browser {
                         }
                     });
                 });
-        } else if self.texture.is_some() {
+        } else if self.show_details && self.texture.is_some() {
             egui::Panel::right("metadata-error")
                 .default_size(230.0)
                 .show(root, |ui| {
@@ -1553,14 +1584,7 @@ impl eframe::App for Browser {
                         )
                         .clicked()
                     {
-                        if self.playback_state == 3 || self.playback_state == 4 {
-                            let _ = self.playback_sender.send(PlaybackRequest::Pause(
-                                self.playback_generation,
-                                self.playback_state == 3,
-                            ));
-                        } else {
-                            self.start_playback(&ctx);
-                        }
+                        self.toggle_playback(&ctx);
                     }
                     if self.playback_shared.is_some() && ui.button(tr(self.language, Text::Stop)).clicked() {
                         self.stop_playback();
