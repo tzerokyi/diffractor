@@ -27,9 +27,12 @@ Linux work is maintained in the [`arch-linux-build` branch](https://github.com/t
 The existing C++ application currently builds its portable core and headless tests
 on Linux. A separate native Rust/egui browser can open local folders, decode
 photos including common camera RAW files, browse/search media and play audio/video.
-**It is not yet the complete Diffractor desktop application.** Full application
-parity requires Linux window, input, font, rendering and audio backends for
-libdesktop, not only a replacement browser UI.
+**It is not yet the complete Diffractor desktop application.** The active
+migration target is a **native Rust/egui frontend** that progressively ports
+the original Windows view/state/command semantics. The working C++ media and
+index core remains behind a bounded bridge while those Rust interfaces are
+reconstructed. The superseded C++/libdesktop Linux-window route is not the
+product target.
 
 The Linux requirements, native preview build commands, Arch packaging steps,
 known limits and phased parity plan are maintained in [docs/linux.md](docs/linux.md).
