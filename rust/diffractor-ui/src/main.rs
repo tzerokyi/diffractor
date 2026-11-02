@@ -150,6 +150,14 @@ fn is_audio(path: &Path) -> bool {
 
 // The media list is the browsing order. Directories cannot become preview
 // targets, and reaching the first/last item does not wrap implicitly.
+// Columns are derived from the actual available pane width, not screen width.
+fn grid_columns(width: f32) -> usize {
+    if !width.is_finite() {
+        return 1;
+    }
+    (width.max(0.0) / 146.0).floor().clamp(1.0, 4.0) as usize
+}
+
 fn next_media_index(entries: &[Entry], selected: Option<&Path>, reverse: bool) -> Option<usize> {
     let current = selected.and_then(|path| {
         entries.iter().position(|item| !item.directory && item.path == path)
@@ -299,6 +307,7 @@ struct Browser {
     selected: Option<PathBuf>,
     selection: Selection,
     visible_media: Vec<PathBuf>,
+    grid_view: bool,
     texture: Option<TextureHandle>,
     zoom: f32,
     pan: egui::Vec2,
@@ -553,6 +562,7 @@ impl Browser {
             selected: None,
             selection: Selection::default(),
             visible_media: Vec::new(),
+            grid_view: true,
             texture: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
@@ -1114,6 +1124,16 @@ impl eframe::App for Browser {
                         .strong(),
                     );
                     ui.label(RichText::new(self.entries.len().to_string()).weak());
+                    if ui.selectable_label(self.grid_view, "▦")
+                        .on_hover_text(tr(self.language, Text::GridView))
+                        .clicked() {
+                        self.grid_view = true;
+                    }
+                    if ui.selectable_label(!self.grid_view, "☷")
+                        .on_hover_text(tr(self.language, Text::ListView))
+                        .clicked() {
+                        self.grid_view = false;
+                    }
                     if self.selection.len() > 0 {
                         ui.separator();
                         ui.label(
@@ -1127,6 +1147,69 @@ impl eframe::App for Browser {
                     ui.label(tr(self.language, Text::EntryLimit));
                 }
                 ui.separator();
+                if self.grid_view {
+                    let columns = grid_columns(ui.available_width());
+                    let cell_width = (ui.available_width() / columns as f32).max(96.0);
+                    let row_count = self.entries.len().div_ceil(columns);
+                    egui::ScrollArea::vertical().show_rows(ui, 152.0, row_count, |ui, rows| {
+                        for row in rows {
+                            ui.horizontal(|ui| {
+                                for index in row * columns..((row + 1) * columns).min(self.entries.len()) {
+                                    let entry = &self.entries[index];
+                                    let selected = self.selection.contains(&entry.path);
+                                    let name = if self.search_active {
+                                        entry.path.strip_prefix(&self.folder)
+                                            .unwrap_or(&entry.path).to_string_lossy()
+                                    } else {
+                                        entry.path.file_name().unwrap_or_default().to_string_lossy()
+                                    };
+                                    let frame = egui::Frame::new()
+                                        .fill(if selected { ui.visuals().selection.bg_fill } else {
+                                            ui.visuals().faint_bg_color
+                                        })
+                                        .corner_radius(7.0)
+                                        .inner_margin(egui::Margin::same(5))
+                                        .show(ui, |ui| {
+                                            ui.set_width((cell_width - 12.0).max(84.0));
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2((cell_width - 22.0).max(72.0), 96.0),
+                                                egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                                                |ui| {
+                                                    if let Some(texture) = self.thumbnails.get(&entry.path) {
+                                                        let extent = texture.size_vec2();
+                                                        let scale = ((cell_width - 22.0) / extent.x)
+                                                            .min(96.0 / extent.y).min(1.0);
+                                                        if ui.add(egui::Image::new(texture)
+                                                            .fit_to_exact_size(extent * scale)
+                                                            .sense(egui::Sense::click())).clicked() {
+                                                            open = Some((entry.path.clone(), entry.directory,
+                                                                selection_intent(ui.input(|i| i.modifiers))));
+                                                        }
+                                                    } else {
+                                                        if !entry.directory
+                                                            && (is_image(&entry.path) || is_video(&entry.path)) {
+                                                            needed_thumbnails.push(entry.path.clone());
+                                                        }
+                                                        let symbol = if entry.directory { "▰" }
+                                                            else if is_audio(&entry.path) { "♫" }
+                                                            else { "▧" };
+                                                        ui.label(RichText::new(symbol).size(30.0).weak());
+                                                    }
+                                                },
+                                            );
+                                            ui.add(egui::Label::new(name.to_string()).truncate()
+                                                .sense(egui::Sense::click()))
+                                                .on_hover_text(name.as_ref());
+                                        });
+                                    if frame.response.interact(egui::Sense::click()).clicked() {
+                                        open = Some((entry.path.clone(), entry.directory,
+                                            selection_intent(ui.input(|i| i.modifiers))));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                } else {
                 egui::ScrollArea::vertical().show_rows(ui, 56.0, self.entries.len(), |ui, rows| {
                     for entry in &self.entries[rows] {
                         let name = if self.search_active {
@@ -1207,6 +1290,7 @@ impl eframe::App for Browser {
                         }
                     }
                 });
+                }
             });
         for path in needed_thumbnails {
             self.request_thumbnail(path);
@@ -1556,6 +1640,15 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grid_columns_follow_actual_pane_width() {
+        assert_eq!(grid_columns(0.0), 1);
+        assert_eq!(grid_columns(200.0), 1);
+        assert_eq!(grid_columns(300.0), 2);
+        assert_eq!(grid_columns(480.0), 3);
+        assert_eq!(grid_columns(f32::NAN), 1);
+    }
+
     #[test]
     fn opens_files_and_folders_and_rejects_invalid_paths() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../exe/test");
