@@ -362,6 +362,8 @@ if (WIN32)
 else ()
     set(DIFFRACTOR_PLATFORM_SOURCES
             src/platform_linux_app.cpp
+            src/platform_linux_index.cpp
+            src/platform_linux_video.cpp
             "${_generated_resources}"
     )
 endif ()
@@ -436,6 +438,16 @@ target_link_libraries(diffractor PRIVATE Threads::Threads)
 get_property(DIFFRACTOR_EXTERNAL_TARGETS GLOBAL PROPERTY DIFFRACTOR_EXTERNAL_TARGETS)
 if (DIFFRACTOR_EXTERNAL_TARGETS)
     add_dependencies(diffractor ${DIFFRACTOR_EXTERNAL_TARGETS})
+endif ()
+
+# Native Linux frontends call the same media scanner through a small C ABI.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set_property(TARGET libfiles PROPERTY POSITION_INDEPENDENT_CODE ON)
+    add_library(diffractor_linux_bridge SHARED src/platform_linux_bridge.cpp)
+    target_link_libraries(diffractor_linux_bridge PRIVATE "$<LINK_GROUP:RESCAN,${_link_group}>" Threads::Threads)
+    if (DIFFRACTOR_EXTERNAL_TARGETS)
+        add_dependencies(diffractor_linux_bridge ${DIFFRACTOR_EXTERNAL_TARGETS})
+    endif ()
 endif ()
 
 # Fixtures, catalogs and dictionaries are read from the folder holding the running binary

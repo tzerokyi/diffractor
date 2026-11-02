@@ -20,6 +20,9 @@
 
 #include <pthread.h>
 
+int run_linux_index_query(const char* folder, const char* query);
+int run_linux_video_frame(const char* path);
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Media
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -74,6 +77,18 @@ int main(const int argc, const char* const argv[])
 	{
 		std::fprintf(stderr, "Cannot initialize the UTF-8 character locale required for filenames.\n");
 		return 1;
+	}
+
+	if (argc == 4 && std::string_view(argv[1]) == "--index-query")
+	{
+		load_file_types();
+		return run_linux_index_query(argv[2], argv[3]);
+	}
+
+	if (argc == 3 && std::string_view(argv[1]) == "--video-frame")
+	{
+		load_file_types();
+		return run_linux_video_frame(argv[2]);
 	}
 
 	// /test[:filter] runs the suite headless. The '-' forms are the Linux spelling; '/test' is

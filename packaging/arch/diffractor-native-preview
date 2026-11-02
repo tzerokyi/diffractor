@@ -1,0 +1,5 @@
+#!/bin/sh
+# The search worker and media bridge are installed beside the frontend.
+app_dir=/usr/lib/diffractor-native-preview
+export LD_LIBRARY_PATH="$app_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$app_dir/diffractor-ui" "$@"

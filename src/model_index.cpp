@@ -2387,14 +2387,14 @@ void index_state::index_roots(df::index_roots roots)
 	}
 }
 
-void index_state::index_folders(df::cancel_token token, const bool scan_collection)
+bool index_state::index_folders(df::cancel_token token, const bool scan_collection)
 {
 	if (!scan_collection)
 	{
 		_fully_loaded = false;
 		_collection_discovery_complete = false;
 		_folders_indexed = true;
-		return;
+		return false;
 	}
 
 	df::scope_locked_inc l(detecting);
@@ -2629,6 +2629,7 @@ void index_state::index_folders(df::cancel_token token, const bool scan_collecti
 	}
 
 	_folders_indexed = true;
+	return discovery_complete && failed_enumerations.empty();
 }
 
 

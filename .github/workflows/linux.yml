@@ -13,6 +13,12 @@ on:
   pull_request:
     branches: [ "master" ]
 
+# Only the newest commit of a PR/branch needs the expensive build result.
+# Preserve Debug/Release jobs within the same run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -57,6 +63,25 @@ jobs:
     # by #ifndef _DEBUG in both configurations, because _DEBUG is an MSVC macro.
     - name: Run tests
       run: bash ./dd test
+
+    # Verify the native Rust UI against the already-built C++ Linux bridge.
+    # Run once on Release; Debug still checks the C++ headless portability floor.
+    # The system VLC headers provide the libvlc linker target; real audio output
+    # and graphical fidelity remain human/on-device verification responsibilities.
+    - name: Install native Rust UI prerequisites
+      if: matrix.config == 'Release'
+      run: |
+        sudo apt-get install -y libvlc-dev libwayland-dev libxkbcommon-dev \
+          libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev
+
+    - name: Check native Rust bridge and frontend
+      if: matrix.config == 'Release'
+      run: |
+        cmake --build tmp/linux-build --target diffractor_linux_bridge
+        LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+          cargo test --manifest-path rust/diffractor-core/Cargo.toml --locked
+        LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+          cargo test --manifest-path rust/diffractor-ui/Cargo.toml --locked
 
     # FFmpeg is configured twice and nothing else notices when the two answers drift. It only
     # needs one configuration, since the comparison is against the checked-in Windows config.

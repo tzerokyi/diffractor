@@ -41,6 +41,7 @@ intermediate/
 *.msix
 exe/tiles/*.png
 /build
+/rust/**/target/
 
 # Captured test output and ad-hoc search scratch at the repository root.
 /test_*.txt
