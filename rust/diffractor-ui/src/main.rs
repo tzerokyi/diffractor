@@ -255,7 +255,8 @@ struct Browser {
 impl Browser {
     fn new(cc: &eframe::CreationContext<'_>, initial: PathBuf) -> Self {
         // Native dark chrome: controls, panels and selection share one palette.
-        let mut style = (*cc.egui_ctx.style()).clone();
+        cc.egui_ctx.set_theme(egui::Theme::Dark);
+        let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
         style.spacing.item_spacing = egui::vec2(8.0, 7.0);
         style.spacing.button_padding = egui::vec2(12.0, 6.0);
         style.visuals = egui::Visuals::dark();
@@ -269,7 +270,7 @@ impl Browser {
         );
         style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(40, 45, 52);
         style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(55, 64, 74);
-        cc.egui_ctx.set_style(style);
+        cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
 
         let (sender, requests) = mpsc::channel();
         let (responses, receiver) = mpsc::channel();
@@ -1006,7 +1007,7 @@ impl eframe::App for Browser {
         self.receive(&ctx);
         // Escape leaves magnification first, then fullscreen; it never
         // unexpectedly closes the native window or drops file selection.
-        if !ctx.wants_keyboard_input() {
+        if !ctx.egui_wants_keyboard_input() {
             if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
                 self.toggle_fullscreen(&ctx);
             } else if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -1023,7 +1024,7 @@ impl eframe::App for Browser {
         }
         // Mirror the original Windows command grammar without intercepting
         // path, search or other active editors.
-        if !ctx.wants_keyboard_input() {
+        if !ctx.egui_wants_keyboard_input() {
             if ctx.input(|input| input.key_pressed(egui::Key::Enter))
                 && self.selected.is_some() && !self.fullscreen {
                 self.toggle_fullscreen(&ctx);
@@ -1046,7 +1047,7 @@ impl eframe::App for Browser {
             }
         }
         // Never steal arrow keys from path/search edits or focused media controls.
-        if !ctx.wants_keyboard_input() && !self.folder_open_pending {
+        if !ctx.egui_wants_keyboard_input() && !self.folder_open_pending {
             let (back, forward, up, all, next, previous, extend) = ctx.input(|input| {
                 let mods = input.modifiers;
                 (
@@ -1721,6 +1722,8 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn image_comparison_preserves_browse_order_not_set_order() {
         let visible: Vec<PathBuf> = ["z.jpg", "folder/ignore.mp4", "a.png"]
