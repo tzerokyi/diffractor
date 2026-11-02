@@ -53,3 +53,12 @@ jobs:
           cargo --version
           cargo check --manifest-path rust/diffractor-core/Cargo.toml --locked --all-targets
           cargo check --manifest-path rust/diffractor-ui/Cargo.toml --locked --all-targets
+      # These pure Rust files don't link the native media bridge, so their real
+      # unit tests can run immediately while the slower C++ build catches up.
+      - name: Test isolated native browser state
+        run: |
+          for module in selection history browser_files; do
+            rustc --edition=2021 --test "rust/diffractor-ui/src/$module.rs" \
+              -o "$RUNNER_TEMP/diffractor-$module-tests"
+            "$RUNNER_TEMP/diffractor-$module-tests"
+          done
