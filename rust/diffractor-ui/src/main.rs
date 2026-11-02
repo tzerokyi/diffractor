@@ -60,6 +60,7 @@ enum Request {
     OpenPath(u64, PathBuf),
     Image(u64, PathBuf),
     Metadata(u64, PathBuf),
+    Compare(u64, PathBuf, PathBuf),
     FullImage(u64, PathBuf),
 }
 
@@ -76,6 +77,7 @@ enum Response {
         Result<(ColorImage, Option<Metadata>, bool), String>,
     ),
     Metadata(u64, PathBuf, Result<Metadata, String>),
+    Compare(u64, PathBuf, PathBuf, Result<(ColorImage, ColorImage), String>),
     Search(u64, PathBuf, Result<Vec<PathBuf>, String>),
     FullImage(u64, PathBuf, Result<ColorImage, String>),
     Playback(u64, Result<(i32, i64, i64), String>),
@@ -294,6 +296,11 @@ fn thumbnail(image: DecodedImage) -> ColorImage {
     ColorImage::from_rgba_unmultiplied([tw, th], &rgba)
 }
 
+struct Comparison {
+    left: TextureHandle,
+    right: TextureHandle,
+}
+
 struct Browser {
     sender: Sender<Request>,
     search_sender: Sender<SearchRequest>,
@@ -305,6 +312,7 @@ struct Browser {
     entries: Vec<Entry>,
     // This is the displayed media, NOT the complete selected batch target.
     selected: Option<PathBuf>,
+    comparison: Option<Comparison>,
     selection: Selection,
     visible_media: Vec<PathBuf>,
     grid_view: bool,
@@ -538,6 +546,15 @@ impl Browser {
                             read_metadata(&path).map_err(|error| format!("{error:?}")),
                         )
                     }
+                    Request::Compare(id, left, right) => {
+                        // Both decoded pictures are bounded by their requested
+                        // preview extent. Source images remain untouched.
+                        let result = decode_image(&left, (1200, 1000))
+                            .and_then(|first| decode_image(&right, (1200, 1000))
+                                .map(|second| (orient(first), orient(second))))
+                            .map_err(|error| format!("{error:?}"));
+                        Response::Compare(id, left, right, result)
+                    }
                     Request::FullImage(id, path) => {
                         let result = decode_image(&path, (0, 0))
                             .map(orient)
@@ -561,6 +578,7 @@ impl Browser {
             address: String::new(),
             entries: Vec::new(),
             selected: None,
+            comparison: None,
             selection: Selection::default(),
             visible_media: Vec::new(),
             grid_view: true,
