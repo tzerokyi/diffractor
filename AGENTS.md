@@ -32,9 +32,20 @@ open the listed source, and run the listed check. Do not read unrelated document
 | Where a test belongs, or why the suite is arranged this way | [testing](docs/testing.md) | `src/test_*.cpp` | `.\dd.ps1 test` |
 | Translated text, catalogs, plural forms | [testing](docs/testing.md) | [app_text.cpp](src/app_text.cpp), `exe/languages` | `.\dd.ps1 test` |
 | Upgrading or patching a vendored dependency | [third-party](docs/third-party.md) | `third-party/`, `cmake/vendored` | `.\dd.ps1 test` |
-| Portability, platform-boundary debt, the Linux build | [Linux port](docs/linux.md) | libdesktop's [platform.h](https://github.com/ZacWalk/libdesktop/blob/main/include/libdesktop/platform.h), [platform_render.h](https://github.com/ZacWalk/libdesktop/blob/main/include/libdesktop/platform_render.h), libdesktop's [platform_linux_ui.cpp](https://github.com/ZacWalk/libdesktop/blob/main/src/render/platform_linux_ui.cpp), [platform_linux_app.cpp](src/platform_linux_app.cpp) | `.github/workflows/linux.yml` |
+| Portability, Linux build, Rust-native UI migration | [Linux port](docs/linux.md) | `rust/diffractor-ui/src/main.rs`, `rust/diffractor-ui/src/{selection,history,locale}.rs`, `rust/diffractor-core/src/lib.rs`, `src/platform_linux_bridge.cpp`, `src/platform_linux_app.cpp` | `cargo test --manifest-path rust/diffractor-ui/Cargo.toml --locked` and `.github/workflows/linux.yml` |
 
 `/test:` filters match the test **name**, case-insensitively, not the file. Every filter above is verified to match at least one test; a filter matching nothing is a failure, not a silent pass. Run them as `.\exe\diffractor64-d.exe /test:*zoom* | Out-Host`.
+
+### Native Rust frontend migration (active)
+The user selected a Rust-native frontend on 2026-11-02, superseding the
+C++/libdesktop Linux UI backend target. Follow the source/behavior correspondence
+and evidence gates in [docs/linux.md](docs/linux.md), and the reusable workflow
+in [SKILLS/rustify](https://github.com/tzerokyi/SKILLS/tree/main/skills/rustify).
+The Windows view/command design remains the behavior reference, **not** a
+request to recreate every C++ platform class in Rust. `Selection` owns the
+complete Rust selected set; `Browser.selected` is a single displayed-media
+handle, never a batch command target. Preserve this distinction when adding
+native commands and do not expose unimplemented file writes.
 
 ## Information ownership
 
