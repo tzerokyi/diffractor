@@ -1086,9 +1086,12 @@ impl eframe::App for Browser {
             if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
                 self.toggle_fullscreen(&ctx);
             } else if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                if self.zoom > 1.0 {
-                    self.zoom = 1.0;
-                    self.pan = egui::Vec2::ZERO;
+                if self.selected.is_some() && self.source_extent.is_some()
+                    && self.zoom.is_magnified(
+                        self.source_extent.unwrap_or(egui::Vec2::ONE),
+                        self.last_viewport,
+                    ) {
+                    self.zoom.fit();
                 } else if self.fullscreen {
                     self.toggle_fullscreen(&ctx);
                 }
@@ -1586,20 +1589,23 @@ impl eframe::App for Browser {
                 });
             }
             let still_image = self.selected.as_ref().is_some_and(|path| is_image(path));
-            let mut zoom_factor = 1.0;
             if still_image && self.texture.is_some() {
                 ui.horizontal(|ui| {
+                    let source = self.source_extent.unwrap_or(egui::Vec2::ONE);
+                    let viewport = self.last_viewport.max(egui::Vec2::ONE);
                     if ui.button("−").on_hover_text(tr(self.language, Text::ZoomOut)).clicked() {
-                        zoom_factor = 1.0 / 1.25;
+                        self.zoom.step(-1, source, viewport, viewport * 0.5);
                     }
                     if ui.button("+").on_hover_text(tr(self.language, Text::ZoomIn)).clicked() {
-                        zoom_factor = 1.25;
+                        self.zoom.step(1, source, viewport, viewport * 0.5);
+                    }
+                    if ui.button("1:1").on_hover_text(tr(self.language, Text::ActualPixels)).clicked() {
+                        self.zoom.actual_pixels(source, viewport);
                     }
                     if ui.button(tr(self.language, Text::Fit)).clicked() {
-                        self.zoom = 1.0;
-                        self.pan = egui::Vec2::ZERO;
+                        self.zoom.fit();
                     }
-                    ui.label(format!("{:.0}% {}", self.zoom * 100.0, tr(self.language, Text::OfFit)));
+                    ui.label(format!("{:.0}%", self.zoom.scale(source, viewport) * 100.0));
                     ui.label(
                         RichText::new(tr(self.language, Text::ZoomHelp))
                             .small()
@@ -1661,46 +1667,44 @@ impl eframe::App for Browser {
                         available.max(egui::Vec2::ZERO),
                         egui::Sense::click_and_drag(),
                     );
-                    let mut anchor = egui::Vec2::ZERO;
+                    let source = self.source_extent.unwrap_or_else(|| texture.size_vec2());
+                    self.last_viewport = viewport.size();
                     if response.hovered() {
                         let (scroll, control, pointer) = ui.input(|i| {
-                            (
-                                i.smooth_scroll_delta.y,
-                                i.modifiers.ctrl,
-                                i.pointer.hover_pos(),
-                            )
+                            (i.smooth_scroll_delta.y, i.modifiers.ctrl, i.pointer.hover_pos())
                         });
-                        if control && scroll != 0.0 {
-                            zoom_factor *= (scroll * 0.002).exp();
-                            anchor = pointer.unwrap_or(viewport.center()) - viewport.center();
+                        if control && scroll.abs() >= 0.01 {
+                            let anchor = pointer.unwrap_or(viewport.center()) - viewport.min;
+                            self.zoom.step(
+                                if scroll > 0.0 { 1 } else { -1 },
+                                source,
+                                viewport.size(),
+                                anchor,
+                            );
                         }
                     }
-                    let next_zoom = (self.zoom * zoom_factor).clamp(1.0, 16.0);
-                    self.pan = anchored_pan(self.pan, anchor, self.zoom, next_zoom);
-                    self.zoom = next_zoom;
                     if response.dragged() {
-                        self.pan += response.drag_delta();
+                        self.zoom.pan_by(response.drag_delta(), source, viewport.size());
                     }
-                    let size = texture.size_vec2();
-                    let fit = (viewport.width() / size.x)
-                        .min(viewport.height() / size.y)
-                        .max(0.0);
-                    let display = size * fit * self.zoom;
-                    self.pan = clamp_pan(self.pan, display, viewport.size());
-                    let rect = egui::Rect::from_center_size(viewport.center() + self.pan, display);
+                    let rect = self.zoom.rect(viewport, source);
                     ui.painter_at(viewport).image(
                         texture.id(),
                         rect,
                         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
-                    if self.zoom > 1.0 && !self.full_image_requested
-                        && !self.folder_open_pending {
+                    // Source-space scale is invariant when a thumbnail/preview is
+                    // replaced by a better texture. Decode full pixels only when
+                    // the visible rectangle outgrows the current decoded raster.
+                    let displayed = rect.size();
+                    let decoded = texture.size_vec2();
+                    if (displayed.x > decoded.x * 1.15 || displayed.y > decoded.y * 1.15)
+                        && !self.full_image_requested && !self.folder_open_pending {
                         self.full_image_requested = true;
                         if let Some(path) = &self.selected {
-                            let _ = self
-                                .sender
-                                .send(Request::FullImage(self.image_generation, path.clone()));
+                            let _ = self.sender.send(
+                                Request::FullImage(self.image_generation, path.clone())
+                            );
                         }
                     }
                 } else {
@@ -1802,23 +1806,6 @@ mod tests {
         assert!(open_target(&root.join("Gherkin.xmp")).is_err());
         assert!(open_target(&root.join("does-not-exist.jpg")).is_err());
     }
-
-    #[test]
-    fn zoom_anchor_and_pan_bounds() {
-        let anchor = egui::vec2(40.0, -20.0);
-        let pan = egui::vec2(10.0, 5.0);
-        let next = super::anchored_pan(pan, anchor, 1.0, 2.0);
-        assert_eq!((anchor - pan) / 1.0, (anchor - next) / 2.0);
-        assert_eq!(
-            super::clamp_pan(
-                egui::vec2(500.0, -500.0),
-                egui::vec2(300.0, 80.0),
-                egui::vec2(100.0, 100.0)
-            ),
-            egui::vec2(100.0, 0.0)
-        );
-    }
-    use super::*;
 
     #[test]
     fn orientation_maps_all_eight_exif_transforms() {
