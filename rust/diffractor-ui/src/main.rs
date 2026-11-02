@@ -1138,6 +1138,9 @@ impl eframe::App for Browser {
             {
                 self.audit_frame_seen = true;
             }
+            if frame.height > 0 && self.selected.as_ref().is_some_and(|path| is_video(path)) {
+                self.video_aspect = Some(frame.width as f32 / frame.height as f32);
+            }
             let image =
                 ColorImage::from_rgba_unmultiplied([frame.width, frame.height], &frame.rgba);
             if let Some(texture) = &mut self.texture {
@@ -1246,7 +1249,9 @@ impl eframe::App for Browser {
             ui.add_space(12.0);
             if let Some(texture) = self.texture.clone() {
                 let available = ui.available_size();
-                if self.playback_shared.is_some() && self.video_aspect.is_some() {
+                // Keep a stopped video centered too; the preview and player share
+                // the same aspect-driven media stage.
+                if self.video_aspect.is_some() {
                     let aspect = self.video_aspect.unwrap_or(1.0);
                     let width = available.x.min(available.y * aspect).max(0.0);
                     let (viewport, _) = ui.allocate_exact_size(
