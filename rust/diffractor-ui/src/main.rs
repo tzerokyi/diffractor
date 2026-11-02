@@ -739,25 +739,47 @@ impl Browser {
         self.present_selection();
     }
 
+    fn comparison_pair(&self) -> Option<(PathBuf, PathBuf)> {
+        if self.selection.len() != 2 {
+            return None;
+        }
+        // Use visible browse order, not lexical BTreeSet order. This preserves
+        // the Windows user's context when comparing two adjacent photographs.
+        let mut paths = self.visible_media.iter().filter(|path| self.selection.contains(path));
+        let left = paths.next()?;
+        let right = paths.next()?;
+        if is_image(left) && is_image(right) {
+            Some((left.clone(), right.clone()))
+        } else {
+            None
+        }
+    }
+
     fn present_selection(&mut self) {
         let single = self.selection.single().map(Path::to_path_buf);
         if let Some(path) = single {
+            self.comparison = None;
             if self.selected.as_ref() != Some(&path) {
                 self.open_image(path);
             }
-        } else {
-            if self.selected.is_some() || self.texture.is_some() {
-                self.stop_playback();
-                self.image_generation += 1;
-                self.selected = None;
-                self.texture = None;
-                self.metadata = None;
-                self.video_aspect = None;
-                self.full_image_requested = false;
-            }
-            if self.selection.len() > 1 {
-                self.status = Status::Empty;
-            }
+            return;
+        }
+        let pair = self.comparison_pair();
+        if self.selected.is_some() || self.texture.is_some() || self.comparison.is_some() || pair.is_some() {
+            self.stop_playback();
+            self.image_generation += 1;
+            self.selected = None;
+            self.texture = None;
+            self.comparison = None;
+            self.metadata = None;
+            self.video_aspect = None;
+            self.full_image_requested = false;
+        }
+        if let Some((left, right)) = pair {
+            self.status = Status::Text(Text::LoadingCompare);
+            let _ = self.sender.send(Request::Compare(self.image_generation, left, right));
+        } else if self.selection.len() > 1 {
+            self.status = Status::Empty;
         }
     }
 
@@ -850,6 +872,7 @@ impl Browser {
                             self.image_generation += 1;
                             self.selected = None;
                             self.selection.clear();
+                            self.comparison = None;
                             self.texture = None;
                             self.metadata = None;
                             self.video_aspect = None;
@@ -949,6 +972,7 @@ impl Browser {
                             self.clear_thumbnails();
                             self.image_generation += 1;
                             self.selected = None;
+                            self.comparison = None;
                             self.texture = None;
                             self.metadata = None;
                             self.entries = paths
