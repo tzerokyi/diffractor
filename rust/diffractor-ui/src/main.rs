@@ -784,12 +784,14 @@ impl Browser {
                             } else {
                                 Text::SelectImage
                             });
-                            // A missing/renamed file must not become a phantom selection.
-                            let restore = selected.or(remembered_selection);
+                            // Explicit file-manager targets were already checked by
+                            // open_target and can sit beyond the 10k list cap. Only
+                            // history-restored selections require list membership.
+                            let restore = selected.or_else(|| remembered_selection.filter(|path| {
+                                self.entries.iter().any(|entry| !entry.directory && entry.path == *path)
+                            }));
                             if let Some(path) = restore {
-                                if self.entries.iter().any(|entry| !entry.directory && entry.path == path) {
-                                    self.open_image(path);
-                                }
+                                self.open_image(path);
                             }
                             #[cfg(feature = "visual-audit")]
                             if let Some(query) = self.audit_query.take() {
