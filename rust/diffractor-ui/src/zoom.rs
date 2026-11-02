@@ -1,7 +1,9 @@
 //! Rust port of Diffractor's source-space zoom contract (src/model_zoom.h).
 //! The source raster dimensions are independent of the currently decoded texture.
 //! A texture upgrade must never change scale, center or the visible subject.
-use eframe::egui::{self, Pos2, Rect, Vec2};
+use eframe::egui::{self, Rect, Vec2};
+#[cfg(test)]
+use eframe::egui::Pos2;
 
 pub const SCALE_LADDER: [f32; 19] = [
     0.05, 0.07, 0.10, 0.15, 0.20, 0.25, 0.33, 0.50, 0.67, 0.75,
