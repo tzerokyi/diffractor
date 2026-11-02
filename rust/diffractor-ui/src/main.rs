@@ -1083,7 +1083,9 @@ impl eframe::App for Browser {
             }
         }
         egui::CentralPanel::default().show(root, |ui| {
-            if let Some(path) = &self.selected {
+            if let Some(file_name) = self.selected.as_ref().map(|path| {
+                path.file_name().unwrap_or_default().to_string_lossy().into_owned()
+            }) {
                 ui.horizontal(|ui| {
                     if ui.button("‹").on_hover_text("Previous media (←)").clicked() {
                         self.step_media(-1);
@@ -1091,10 +1093,7 @@ impl eframe::App for Browser {
                     if ui.button("›").on_hover_text("Next media (→)").clicked() {
                         self.step_media(1);
                     }
-                    ui.label(
-                        RichText::new(path.file_name().unwrap_or_default().to_string_lossy())
-                            .strong().size(17.0),
-                    );
+                    ui.label(RichText::new(file_name).strong().size(17.0));
                 });
             } else {
                 ui.heading("Photo preview");
