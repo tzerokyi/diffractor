@@ -960,10 +960,13 @@ impl eframe::App for Browser {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Diffractor").size(22.0).strong()
                     .color(Color32::from_rgb(220, 237, 244)));
-                ui.separator();
-                if ui.button(self.language.badge()).clicked() {
-                    self.language.toggle();
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(self.language.badge()).clicked() {
+                        self.language.toggle();
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
                 let can_back = self.history.back_target().is_some();
                 if ui.add_enabled(can_back, egui::Button::new("←"))
                     .on_hover_text(tr(self.language, Text::HistoryBack)).clicked() {
