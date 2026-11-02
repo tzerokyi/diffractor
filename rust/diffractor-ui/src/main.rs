@@ -308,6 +308,7 @@ struct Browser {
     selection: Selection,
     visible_media: Vec<PathBuf>,
     grid_view: bool,
+    fullscreen: bool,
     texture: Option<TextureHandle>,
     zoom: f32,
     pan: egui::Vec2,
@@ -563,6 +564,7 @@ impl Browser {
             selection: Selection::default(),
             visible_media: Vec::new(),
             grid_view: true,
+            fullscreen: false,
             texture: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
@@ -739,6 +741,16 @@ impl Browser {
                 self.status = Status::Empty;
             }
         }
+    }
+
+    fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        // Keep the same folder/selection/media state; fullscreen only changes
+        // presentation and native window mode.
+        if self.selected.is_none() && !self.fullscreen {
+            return;
+        }
+        self.fullscreen = !self.fullscreen;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
     }
 
     fn open_image(&mut self, path: PathBuf) {
@@ -1010,6 +1022,20 @@ impl eframe::App for Browser {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
         self.receive(&ctx);
+        // Escape leaves magnification first, then fullscreen; it never
+        // unexpectedly closes the native window or drops file selection.
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
+                self.toggle_fullscreen(&ctx);
+            } else if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                if self.zoom > 1.0 {
+                    self.zoom = 1.0;
+                    self.pan = egui::Vec2::ZERO;
+                } else if self.fullscreen {
+                    self.toggle_fullscreen(&ctx);
+                }
+            }
+        }
         // Never steal arrow keys from path/search edits or focused media controls.
         if !ctx.wants_keyboard_input() && !self.folder_open_pending {
             let (back, forward, up, all, next, previous, extend) = ctx.input(|input| {
@@ -1041,6 +1067,7 @@ impl eframe::App for Browser {
                 self.step_media(-1, extend);
             }
         }
+        if !self.fullscreen {
         egui::Panel::top("header").show(root, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Diffractor").size(22.0).strong()
@@ -1048,6 +1075,12 @@ impl eframe::App for Browser {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(self.language.badge()).clicked() {
                         self.language.toggle();
+                    }
+                    if ui.add_enabled(self.selected.is_some(),
+                        egui::Button::new("⛶"))
+                        .on_hover_text(tr(self.language, Text::Fullscreen))
+                        .clicked() {
+                        self.toggle_fullscreen(&ctx);
                     }
                 });
             });
@@ -1391,6 +1424,7 @@ impl eframe::App for Browser {
                     ui.label(tr(self.language, Text::ReadDetailsFailed));
                 });
         }
+        } // Keep native Items panels hidden while displaying the same media fullscreen.
         if let Some(frame) = self
             .playback_shared
             .as_ref()
@@ -1413,6 +1447,9 @@ impl eframe::App for Browser {
             }
         }
         egui::CentralPanel::default().show(root, |ui| {
+            if self.fullscreen && ui.button(tr(self.language, Text::ExitFullscreen)).clicked() {
+                self.toggle_fullscreen(&ctx);
+            }
             if let Some(file_name) = self.selected.as_ref().map(|path| {
                 path.file_name().unwrap_or_default().to_string_lossy().into_owned()
             }) {
