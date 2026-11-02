@@ -2,10 +2,12 @@ mod history;
 mod locale;
 mod selection;
 mod video;
+mod zoom;
 
 use history::{History, Travel, Visit};
 use selection::{Intent, Selection};
 use locale::{tr, Locale, Status, Text};
+use zoom::Zoom;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -19,7 +21,7 @@ use std::{
 };
 
 use diffractor_core::{
-    decode_image, read_metadata, search_folder_cancellable, video_preview, DecodedImage, Metadata,
+    decode_image, probe_image, read_metadata, search_folder_cancellable, video_preview, DecodedImage, Metadata,
     SearchError,
 };
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle};
@@ -35,18 +37,6 @@ fn selection_intent(modifiers: egui::Modifiers) -> Intent {
         (false, true) => Intent::Toggle,
         (false, false) => Intent::Replace,
     }
-}
-
-fn clamp_pan(pan: egui::Vec2, image: egui::Vec2, viewport: egui::Vec2) -> egui::Vec2 {
-    let limit = ((image - viewport) * 0.5).max(egui::Vec2::ZERO);
-    egui::vec2(
-        pan.x.clamp(-limit.x, limit.x),
-        pan.y.clamp(-limit.y, limit.y),
-    )
-}
-
-fn anchored_pan(pan: egui::Vec2, anchor: egui::Vec2, old_zoom: f32, new_zoom: f32) -> egui::Vec2 {
-    anchor - (anchor - pan) * (new_zoom / old_zoom)
 }
 
 #[derive(Debug)]
@@ -74,7 +64,7 @@ enum Response {
     Image(
         u64,
         PathBuf,
-        Result<(ColorImage, Option<Metadata>, bool), String>,
+        Result<(ColorImage, Option<Metadata>, bool, Option<egui::Vec2>), String>,
     ),
     Metadata(u64, PathBuf, Result<Metadata, String>),
     Compare(u64, PathBuf, PathBuf, Result<(ColorImage, ColorImage), String>),
@@ -314,8 +304,9 @@ struct Browser {
     grid_view: bool,
     fullscreen: bool,
     texture: Option<TextureHandle>,
-    zoom: f32,
-    pan: egui::Vec2,
+    zoom: Zoom,
+    source_extent: Option<egui::Vec2>,
+    last_viewport: egui::Vec2,
     full_image_requested: bool,
     metadata: Option<Metadata>,
     status: Status,
@@ -528,7 +519,21 @@ impl Browser {
                             decode_image(&path, (1600, 1200))
                         };
                         let result = decoded
-                            .map(|image| (orient(image), read_metadata(&path).ok(), video))
+                            .map(|image| {
+                                let original = if video {
+                                    None
+                                } else {
+                                    probe_image(&path).ok().map(|info| {
+                                        let (width, height) = if matches!(info.orientation, 5..=8) {
+                                            (info.height, info.width)
+                                        } else {
+                                            (info.width, info.height)
+                                        };
+                                        egui::vec2(width as f32, height as f32)
+                                    })
+                                };
+                                (orient(image), read_metadata(&path).ok(), video, original)
+                            })
                             .map_err(|_| {
                                 "Cannot decode this image with the current media backend."
                                     .to_owned()
@@ -580,8 +585,9 @@ impl Browser {
             grid_view: true,
             fullscreen: false,
             texture: None,
-            zoom: 1.0,
-            pan: egui::Vec2::ZERO,
+            zoom: Zoom::default(),
+            source_extent: None,
+            last_viewport: egui::Vec2::ZERO,
             full_image_requested: false,
             metadata: None,
             status: Status::Empty,
@@ -758,6 +764,7 @@ impl Browser {
             self.metadata = None;
             self.video_aspect = None;
             self.full_image_requested = false;
+            self.source_extent = None;
         }
         if let Some((left, right)) = pair {
             self.status = Status::Text(Text::LoadingCompare);
@@ -784,8 +791,8 @@ impl Browser {
             return;
         }
         self.stop_playback();
-        self.zoom = 1.0;
-        self.pan = egui::Vec2::ZERO;
+        self.zoom.fit();
+        self.source_extent = None;
         self.full_image_requested = false;
         self.image_generation += 1;
         self.selected = Some(path.clone());
@@ -900,8 +907,13 @@ impl Browser {
                     if id == self.image_generation && self.selected.as_ref() == Some(&path) =>
                 {
                     match result {
-                        Ok((image, metadata, video)) => {
+                        Ok((image, metadata, video, original)) => {
                             let size = image.size;
+                            if !video {
+                                self.source_extent = Some(original.unwrap_or_else(|| {
+                                    egui::vec2(size[0] as f32, size[1] as f32)
+                                }));
+                            }
                             if video && size[1] > 0 {
                                 self.video_aspect = Some(size[0] as f32 / size[1] as f32);
                             }
@@ -953,6 +965,9 @@ impl Browser {
                                 self.status = Status::Text(Text::FullImageTooLarge);
                                 continue;
                             }
+                            self.source_extent.get_or_insert_with(|| {
+                                egui::vec2(size[0] as f32, size[1] as f32)
+                            });
                             self.texture = Some(ctx.load_texture(
                                 "full image",
                                 image,
