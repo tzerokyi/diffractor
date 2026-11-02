@@ -291,6 +291,7 @@ struct Browser {
     status: Status,
     language: Locale,
     folder_generation: u64,
+    folder_open_pending: bool,
     image_generation: u64,
     truncated: bool,
     search_text: String,
@@ -540,6 +541,7 @@ impl Browser {
             status: Status::Empty,
             language: Locale::detect(),
             folder_generation: 0,
+            folder_open_pending: false,
             image_generation: 0,
             truncated: false,
             search_text: String::new(),
@@ -586,6 +588,7 @@ impl Browser {
         // A failed or refused path must never destroy the current browser state.
         // Only a successful Folder response commits the replacement view.
         self.folder_generation += 1;
+        self.folder_open_pending = true;
         self.search_generation += 1;
         self.search_currency
             .store(self.search_generation, Ordering::Release);
@@ -596,7 +599,10 @@ impl Browser {
         } else {
             Request::Folder(self.folder_generation, path)
         };
-        let _ = self.sender.send(request);
+        if self.sender.send(request).is_err() {
+            self.folder_open_pending = false;
+            self.status = Status::Error("Folder worker is unavailable.".into());
+        }
     }
 
     fn clear_thumbnails(&mut self) {
@@ -631,7 +637,9 @@ impl Browser {
     }
 
     fn search(&mut self) {
-        if self.folder.as_os_str().is_empty() || self.search_text.trim().is_empty() {
+        if self.folder_open_pending
+            || self.folder.as_os_str().is_empty()
+            || self.search_text.trim().is_empty() {
             return;
         }
         self.search_generation += 1;
@@ -663,6 +671,11 @@ impl Browser {
     }
 
     fn open_image(&mut self, path: PathBuf) {
+        // A pending folder transaction owns the next state transition.
+        // Enqueueing an image here would supersede its folder request.
+        if self.folder_open_pending {
+            return;
+        }
         self.stop_playback();
         self.zoom = 1.0;
         self.pan = egui::Vec2::ZERO;
@@ -713,6 +726,7 @@ impl Browser {
         while let Ok(response) = self.receiver.try_recv() {
             match response {
                 Response::Folder(id, path, result, selected) if id == self.folder_generation => {
+                    self.folder_open_pending = false;
                     match result {
                         Ok((entries, truncated)) => {
                             // Commit all view changes together; failed opening leaves
@@ -938,7 +952,8 @@ impl eframe::App for Browser {
                 );
                 let enter = edit.lost_focus()
                     && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let can_search = !self.folder.as_os_str().is_empty()
+                let can_search = !self.folder_open_pending
+                    && !self.folder.as_os_str().is_empty()
                     && !self.search_text.trim().is_empty();
                 let clicked = ui.add_enabled(
                     can_search,
@@ -1287,7 +1302,8 @@ impl eframe::App for Browser {
                         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
-                    if self.zoom > 1.0 && !self.full_image_requested {
+                    if self.zoom > 1.0 && !self.full_image_requested
+                        && !self.folder_open_pending {
                         self.full_image_requested = true;
                         if let Some(path) = &self.selected {
                             let _ = self
