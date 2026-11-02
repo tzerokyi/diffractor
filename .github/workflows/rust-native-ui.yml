@@ -1,0 +1,49 @@
+# Fast source/type feedback for the in-progress native Rust frontend.
+# The original C++ bridge is linked only by the full Linux/Arch build:
+# cargo check validates Rust APIs and borrow semantics without a native link.
+name: Rust Native UI
+
+on:
+  push:
+    branches: [arch-linux-build]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-native-ui.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-native-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install native-window development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev \
+            libgl1-mesa-dev
+      - name: Restore Cargo check artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/diffractor-ui/target
+          key: rust-ui-check-${{ runner.os }}-${{ hashFiles('rust/diffractor-ui/Cargo.lock') }}
+          restore-keys: rust-ui-check-${{ runner.os }}-
+      - name: Type-check core and all UI targets
+        run: |
+          rustc --version
+          cargo --version
+          cargo check --manifest-path rust/diffractor-core/Cargo.toml --locked --all-targets
+          cargo check --manifest-path rust/diffractor-ui/Cargo.toml --locked --all-targets
