@@ -279,3 +279,40 @@ headers and system fonts affect native preview operation; large RAW/HDR and
 HEIF cases still need real-display review; XMP and non-destructive edit workflows
 are not present in the Rust frontend. Do not report L3–L5 as complete merely
 because the headless portable suite passes.
+
+### 2026-11-02 source checkpoint — native preview
+
+- Code snapshot reviewed: `eef23c3aa1d5b9a0871f3423127b03815625cf8d` on
+  `arch-linux-build`. Review changes are kept in
+  [draft PR #1](https://github.com/tzerokyi/diffractor/pull/1).
+- **STATIC:** Semantic catalog has 58 keys and 58 translation arms, with no
+  unresolved `Text::` references. History restoration and media-edge
+  navigation have isolated regression tests checked into source; they have
+  **not** been executed in this session.
+- UI improvements wired: selected/clickable media rows; keyboard and
+  previous/next navigation; localized controls and status; audio details and
+  centered audio stage; centered paused/playing video; responsive toolbar.
+- State correction: only successful folder enumeration commits the new
+  browser state. A failed open keeps prior selection and playback intact.
+  Pending navigation blocks outdated media requests from superseding its
+  folder worker request. Back/Forward history is bounded to 100 folder
+  visits, with file selection restored when still present.
+- The behavior is **source-reviewed, not a GUI-verified baseline**.
+  Local `cargo`, `rustc` and `rustfmt` were unavailable in the
+  review environment, and no Arch/Wayland/X11 runtime check was made.
+  L1 and L2 are not declared complete until actual GUI build and user-visible
+  checks confirm them; L3–L5 are unimplemented.
+
+For the next native preview verification, after building the Linux bridge
+with the commands above, run in the same checkout:
+
+```bash
+LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  cargo test --manifest-path rust/diffractor-ui/Cargo.toml
+LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  cargo run --manifest-path rust/diffractor-ui/Cargo.toml -- "$HOME/Pictures"
+```
+
+Check Korean/English switching, row selection, folder Back/Forward including
+missing folders, photo zoom and RAW orientation, video centering at rest and
+during playback, audio details and ordinary media keyboard navigation.
