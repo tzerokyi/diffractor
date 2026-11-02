@@ -21,6 +21,22 @@ Free, high-performance photo and video organizer for Windows. Optimized for spee
 | **Editing** | Resize, rotate, crop, perspective, temperature and tint, color adjustment, and automatic color, straighten, and document correction |
 | **Languages** | English plus 13 translation catalogs |
 
+## Linux preview (experimental)
+
+Linux work is maintained in the [`arch-linux-build` branch](https://github.com/tzerokyi/diffractor/tree/arch-linux-build).
+The existing C++ application currently builds its portable core and headless tests
+on Linux. A separate native Rust/egui browser can open local folders, decode
+photos including common camera RAW files, browse/search media and play audio/video.
+**It is not yet the complete Diffractor desktop application.** Full application
+parity requires Linux window, input, font, rendering and audio backends for
+libdesktop, not only a replacement browser UI.
+
+The Linux requirements, native preview build commands, Arch packaging steps,
+known limits and phased parity plan are maintained in [docs/linux.md](docs/linux.md).
+The preview's user interface supports Korean and English; switch languages in
+the header without restarting the app. File deletion, metadata editing and
+other original Windows batch workflows are **not** claimed for the preview.
+
 ## Building
 
 ```bash
