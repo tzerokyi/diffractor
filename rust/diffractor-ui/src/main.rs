@@ -1002,13 +1002,27 @@ impl eframe::App for Browser {
         self.receive(&ctx);
         // Never steal arrow keys from path/search edits or focused media controls.
         if !ctx.wants_keyboard_input() && !self.folder_open_pending {
-            let (all, next, previous, extend) = ctx.input(|input| (
-                input.modifiers.command && input.key_pressed(egui::Key::A),
-                input.key_pressed(egui::Key::ArrowRight),
-                input.key_pressed(egui::Key::ArrowLeft),
-                input.modifiers.shift,
-            ));
-            if all {
+            let (back, forward, up, all, next, previous, extend) = ctx.input(|input| {
+                let mods = input.modifiers;
+                (
+                    mods.alt && input.key_pressed(egui::Key::ArrowLeft),
+                    mods.alt && input.key_pressed(egui::Key::ArrowRight),
+                    mods.alt && input.key_pressed(egui::Key::ArrowUp),
+                    mods.command && input.key_pressed(egui::Key::A),
+                    !mods.alt && !mods.command && input.key_pressed(egui::Key::ArrowRight),
+                    !mods.alt && !mods.command && input.key_pressed(egui::Key::ArrowLeft),
+                    mods.shift,
+                )
+            });
+            if back {
+                self.go_back();
+            } else if forward {
+                self.go_forward();
+            } else if up {
+                if let Some(parent) = self.folder.parent().map(Path::to_path_buf) {
+                    self.open_folder(parent);
+                }
+            } else if all {
                 self.selection.select_all(&self.visible_media);
                 self.present_selection();
             } else if next {
