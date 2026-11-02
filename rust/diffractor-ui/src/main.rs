@@ -135,6 +135,28 @@ fn is_audio(path: &Path) -> bool {
     })
 }
 
+// The media list is the browsing order. Directories cannot become preview
+// targets, and reaching the first/last item does not wrap implicitly.
+fn next_media_index(entries: &[Entry], selected: Option<&Path>, reverse: bool) -> Option<usize> {
+    let current = selected.and_then(|path| {
+        entries.iter().position(|item| !item.directory && item.path == path)
+    });
+    if reverse {
+        match current {
+            Some(index) => entries[..index]
+                .iter()
+                .rposition(|item| !item.directory)
+                .or(Some(index)),
+            None => entries.iter().rposition(|item| !item.directory),
+        }
+    } else {
+        entries.iter().enumerate().skip(current.map_or(0, |index| index + 1))
+            .find(|(_, item)| !item.directory)
+            .map(|(index, _)| index)
+            .or(current)
+    }
+}
+
 fn list_folder(path: &Path) -> Result<(Vec<Entry>, bool), String> {
     let mut items = Vec::new();
     let mut truncated = false;
@@ -624,27 +646,19 @@ impl Browser {
         });
     }
 
-    // Navigate the media list without accidentally entering a folder. The current
-    // selection remains authoritative; browsing never mutates any source file.
+    // Navigate the original list in-place. Only the destination path is cloned;
+    // keyboard traversal stays cheap even when a folder contains 10,000 entries.
     fn step_media(&mut self, direction: isize) {
-        let media: Vec<_> = self.entries.iter()
-            .filter(|entry| !entry.directory)
-            .map(|entry| entry.path.clone())
-            .collect();
-        if media.is_empty() {
-            return;
-        }
-        let current = self.selected.as_ref()
-            .and_then(|path| media.iter().position(|item| item == path));
-        let next = match (current, direction < 0) {
-            (Some(0), true) => 0,
-            (Some(index), true) => index - 1,
-            (Some(index), false) => (index + 1).min(media.len() - 1),
-            (None, true) => media.len() - 1,
-            (None, false) => 0,
-        };
-        if self.selected.as_ref() != Some(&media[next]) {
-            self.open_image(media[next].clone());
+        let index = next_media_index(
+            &self.entries,
+            self.selected.as_deref(),
+            direction < 0,
+        );
+        if let Some(index) = index {
+            let path = self.entries[index].path.clone();
+            if self.selected.as_ref() != Some(&path) {
+                self.open_image(path);
+            }
         }
     }
 
@@ -1342,6 +1356,24 @@ mod tests {
         assert_eq!(open_target(&file).unwrap(), (root.clone(), Some(file)));
         assert!(open_target(&root.join("Gherkin.xmp")).is_err());
         assert!(open_target(&root.join("does-not-exist.jpg")).is_err());
+    }
+
+    #[test]
+    fn media_navigation_skips_folders_and_stops_at_edges() {
+        let entries = [
+            Entry { path: PathBuf::from("/gallery/folder"), directory: true },
+            Entry { path: PathBuf::from("/gallery/one.jpg"), directory: false },
+            Entry { path: PathBuf::from("/gallery/more"), directory: true },
+            Entry { path: PathBuf::from("/gallery/two.mp4"), directory: false },
+        ];
+        assert_eq!(next_media_index(&entries, None, false), Some(1));
+        assert_eq!(next_media_index(&entries, None, true), Some(3));
+        assert_eq!(next_media_index(&entries, Some(&entries[1].path), false), Some(3));
+        assert_eq!(next_media_index(&entries, Some(&entries[3].path), true), Some(1));
+        assert_eq!(next_media_index(&entries, Some(&entries[1].path), true), Some(1));
+        assert_eq!(next_media_index(&entries, Some(&entries[3].path), false), Some(3));
+        assert_eq!(next_media_index(&entries[..1], None, false), None);
+        assert_eq!(next_media_index(&[], None, true), None);
     }
 
     #[test]
