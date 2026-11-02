@@ -1210,15 +1210,15 @@ impl eframe::App for Browser {
                         .clicked() {
                         self.grid_view = false;
                     }
-                    if self.selection.len() > 0 {
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!("{} {}", self.selection.len(),
-                                tr(self.language, Text::SelectedCount)))
-                                .color(Color32::from_rgb(180, 215, 237)),
-                        );
-                    }
                 });
+                if self.selection.len() > 0 {
+                    ui.label(
+                        RichText::new(format!("{} {}", self.selection.len(),
+                            tr(self.language, Text::SelectedCount)))
+                            .small()
+                            .color(Color32::from_rgb(180, 215, 237)),
+                    );
+                }
                 if self.truncated {
                     ui.label(tr(self.language, Text::EntryLimit));
                 }
