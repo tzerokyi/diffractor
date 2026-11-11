@@ -66,12 +66,12 @@ jobs:
 
     # Verify the native Rust UI against the already-built C++ Linux bridge.
     # Run once on Release; Debug still checks the C++ headless portability floor.
-    # The system VLC headers provide the libvlc linker target; real audio output
-    # and graphical fidelity remain human/on-device verification responsibilities.
+    # libVLC needs both development headers and runtime plugins for the media tests;
+    # real audio output and graphical fidelity remain on-device verification responsibilities.
     - name: Install native Rust UI prerequisites
       if: matrix.config == 'Release'
       run: |
-        sudo apt-get install -y libvlc-dev libwayland-dev libxkbcommon-dev \
+        sudo apt-get install -y libvlc-dev vlc-plugin-base libwayland-dev libxkbcommon-dev \
           libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev
 
     - name: Check native Rust bridge and frontend

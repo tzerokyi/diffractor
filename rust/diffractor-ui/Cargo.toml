@@ -11,3 +11,4 @@ visual-audit = ["eframe/__screenshot"]
 [dependencies]
 diffractor-core = { path = "../diffractor-core" }
 eframe = { version = "=0.37.0", default-features = false, features = ["glow", "default_fonts", "system_fonts", "x11", "wayland", "clipboard"] }
+rfd = "=0.17.2"

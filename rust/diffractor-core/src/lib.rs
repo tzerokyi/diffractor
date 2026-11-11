@@ -243,7 +243,7 @@ pub struct Metadata {
     pub rating: Option<i32>,
 }
 
-/// Read embedded metadata on a worker. Missing tags remain empty; no file is modified.
+/// Read metadata on a worker, including conventional RAW XMP sidecars. No file is modified.
 pub fn read_metadata(path: &Path) -> Result<Metadata, ProbeError> {
     let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| ProbeError::InvalidPath)?;
     let ptr = std::ptr::NonNull::new(unsafe { diffractor_metadata_read(path.as_ptr()) })
@@ -427,6 +427,25 @@ mod tests {
             read_metadata(&fixture("missing-image")),
             Err(ProbeError::Unreadable)
         );
+    }
+
+    #[test]
+    fn reads_raw_sidecar_and_treats_empty_sidecar_as_authoritative() {
+        let dir = std::env::temp_dir().join(format!("diffractor-raw-xmp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raw = dir.join("photo.CR2");
+        std::fs::copy(fixture("Gherkin.CR2"), &raw).unwrap();
+        let sidecar = dir.join("photo.xmp");
+        std::fs::write(&sidecar, r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmp:Rating="3"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Sidecar title</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>"#).unwrap();
+        let before = std::fs::metadata(&raw).unwrap().len();
+        let metadata = read_metadata(&raw).unwrap();
+        assert_eq!(metadata.title, "Sidecar title");
+        assert_eq!(metadata.rating, Some(3));
+        assert!(!metadata.camera_model.is_empty());
+        assert_eq!(std::fs::metadata(&raw).unwrap().len(), before);
+        std::fs::write(&sidecar, "").unwrap();
+        assert_eq!(read_metadata(&raw).unwrap().rating, None);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

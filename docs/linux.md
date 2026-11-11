@@ -13,7 +13,7 @@ collections, locations, and core file operations use the same model and tests as
 The CMake executable remains a headless test target. An experimental Rust native frontend can
 browse folders, preview images, play video and audio, display embedded metadata and search a folder
 recursively with the original index. It is not yet the full Diffractor application: managed multi-root
-collections, XMP sidecars in the details panel, editing, and desktop integration are not connected.
+collections, general XMP sidecars in the details panel, most editing, and desktop integration are not connected.
 The Arch package is an experimental preview, not the complete product.
 
 An experimental Rust bridge now exposes libfiles image-header scanning, metadata and bounded image decoding
@@ -36,13 +36,43 @@ true original-pixel 1:1, source-anchored zoom and edge-clamped panning.
 The worker probes oriented source dimensions separately from the decoded preview,
 so switching to better pixels does not change zoom geometry. Full-resolution
 decode stays within the bridge's 256 MiB pixel limit and GPU texture-size
-cap; unsupported large images retain the preview. The original linked comparison
-zoom, navigator and progressive tiles are not yet implemented.
+cap; unsupported large images retain the preview. A native auto-hiding navigator shows the
+visible source region and permits click/drag repositioning; it can be disabled for the session.
+Two-photo comparison shares zoom and normalized pan, with the active pane supplying the zoom anchor;
+each image retains its own oriented source dimensions. Full-resolution comparison decoding is bounded
+and falls back to the previews if either image cannot be upgraded. Panorama navigation and progressive
+tiles are not yet implemented.
 The preview accepts a media file or folder as its command-line argument and advertises supported
 media types to desktop file managers. A file argument opens its containing folder and selects the
 file; resolving the path and reading the folder happen on the worker.
 Common camera RAW extensions are visible in the browser, with previews decoded through libfiles'
-RAW support when ordinary image decoding does not apply. RAW sidecar metadata is not yet shown.
+RAW support when ordinary image decoding does not apply. The details panel reads conventional
+`name.xmp` or `name.raw-extension.xmp` RAW sidecars using libfiles' RAW and XMP readers; a sidecar
+replaces the embedded XMP packet. Other sidecar association rules are not yet connected.
+The native frontend accepts a single file or folder dropped from the file manager. Refresh
+re-enumerates the folder while retaining still-visible selection, or re-runs the currently displayed
+search; opening and enumeration continue on the existing worker. File and folder pickers use the
+desktop portal (or zenity as a fallback); a picker result is discarded if navigation or search has
+changed while it was open.
+The native slideshow advances through visible photos, video and audio. Photo hold time can be set
+from 1 to 30 seconds (default 3, for the current session); timed media play to completion, and the
+sequence stops at the end. Repeat modes and persistent slideshow settings are not yet connected.
+For a single displayed photo, title, description, rating and tag additions/removals can be reviewed and saved through the original
+`files::update` worker. The UI checks the file and conventional sidecar identity before saving;
+the existing staged or in-place write contract applies and no separate backup is requested.
+For an all-photo selection, reviewed optional title, description, rating and tag additions/removals can be applied to
+the selected set, with progress, individual results and stale-file failures. Cancellation stops
+before the next file and reports completed, failed and cancelled items separately; it does not undo
+completed writes. Files that may share a sidecar
+cannot be edited together. This is not a guarantee against a concurrent writer after the pre-save
+check. Other metadata edits and general sidecar association remain unimplemented.
+After a metadata write in the active search scope, the submitted search is rerun against the
+refreshed index. An in-flight query is rerun before its results are shown; when the result still
+contains the same selection, a metadata-only refresh retains its displayed pixels and playback.
+Single-file rename analyzes the source folder with the original index's sidecar association,
+shows every source and destination, and calls the original rename and recovery path after review.
+It refuses destination collisions, changed source files, changed sidecar lists, and companions shared
+with another indexed item. Batch rename and other collision policies remain unimplemented.
 
 ## Platform Boundary
 
@@ -248,9 +278,9 @@ both the Rust UI and C++ index: explicitly identify the authoritative owner.
 | --- | --- | --- |
 | Items folder/media list, focus and multi-select (Design: Selection) | `rust/diffractor-ui/src/main.rs` and `selection.rs` | SOURCE: row and virtualized grid/list selection, plain/Ctrl/Shift/Ctrl+Shift, Ctrl+A, summary read-only; directories still navigate rather than enter a batch selection |
 | Navigation and history (Design: Navigation) | `history.rs`, Rust folder worker | SOURCE: bounded Back/Forward, commit after successful enumeration; query and selection restoration incomplete |
-| Image view and zoom (Zoom) | `zoom.rs`, `main.rs`, C++ libfiles decode bridge | SOURCE: original 19-stop ladder, exact source 1:1, source-based anchor/center/pan; navigator, linked comparison zoom and progressive tiles remain |
+| Image view and zoom (Zoom) | `zoom.rs`, `main.rs`, C++ libfiles decode bridge | SOURCE: original 19-stop ladder, exact source 1:1, source-based anchor/center/pan, planar navigator and linked comparison zoom; progressive tiles remain |
 | Original media index and query parser | `diffractor-core`, `platform_linux_index.cpp` | Existing worker, folder-scoped recursive search, local SQLite cache; managed multi-root collections missing |
-| Metadata/sidecars/edit/ratings | `diffractor-core`, future Rust task views and reviewed write plans | Embedded metadata read only; XMP sidecars and writes not connected |
+| Metadata/sidecars/edit/ratings | `diffractor-core`, `rating.rs`, Linux worker and future Rust task views | Embedded and conventional RAW XMP metadata read; reviewed single- and multi-photo title/description/rating/tag changes use `files::update`; other sidecar associations and edits not connected |
 | Audio/video playback | `video.rs` and original FFmpeg preview | CPU-copy libVLC playback + timeline; native video feature parity/hardware acceleration incomplete |
 | Fullscreen, comparison, import/sync and batch file operations | Rust `main.rs` native view and future task modules | SOURCE: F11 fullscreen, Esc zoom-before-exit, two-photo source-ordered comparison with decoded frames; import/sync/batch file writes still not ported |
 | Localization and original visual identity | `locale.rs` and native style components | Typed Korean/English tokens, graphite theme; original iconography/geometry and broader language coverage incomplete |
@@ -368,6 +398,16 @@ Linux bridge test when available), repair compilation defects and then verify
 selection/grid/fullscreen/zoom/comparison on Arch/KDE. Follow with the source
 navigator, linked two-pane zoom, original Items layout and comparison metadata.
 Do not implement destructive operations until the reviewed-action backend exists.
+
+### 2026-11-05 local verification
+
+At `3976ccd`, the locked Rust UI all-targets check and the linked UI test suite
+passed locally (23 passed; the audio-output test requires an isolated sink and
+was ignored). A debug visual-audit launch displayed `exe/test/Test.jpg` and its
+embedded metadata in a native window. This confirms a basic launch and decode,
+not interactive keyboard, fullscreen, comparison, audio-output, performance,
+or Windows-parity validation. The earlier source-only statements above describe
+the evidence available in that session.
 
 For the native preview's current compile and interactive check, after building
 the existing Linux bridge as above:

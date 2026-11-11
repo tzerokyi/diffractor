@@ -13,6 +13,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <cctype>
 #include <vector>
 
 struct diffractor_decoded_image
@@ -32,6 +33,15 @@ struct diffractor_metadata
 
 namespace
 {
+bool is_raw_path(const std::filesystem::path& path)
+{
+    auto ext = path.extension().string();
+    std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    constexpr std::string_view extensions[] = {".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng",
+        ".raf", ".orf", ".rw2", ".pef", ".srw", ".3fr", ".iiq", ".erf", ".kdc", ".mos", ".mrw", ".x3f"};
+    return std::ranges::find(extensions, ext) != std::end(extensions);
+}
+
 class file_stream final : public libfiles::stream
 {
     std::ifstream _file;
@@ -178,6 +188,42 @@ extern "C" diffractor_metadata* diffractor_metadata_read(const char* path)
         libfiles::reader reader(file);
         auto result = std::make_unique<diffractor_metadata>();
         result->properties = libfiles::read_properties(reader);
+        const auto native_path = std::filesystem::path(path);
+        if (is_raw_path(native_path))
+        {
+            // Use the same LibRaw scanner and XMP reader as the application.
+            const auto scanned = libfiles::scan_raw(native_path, libfiles::scan_intent::index, nullptr);
+            if (!scanned.success) return nullptr;
+            auto stem_sidecar = native_path;
+            stem_sidecar.replace_extension(".xmp");
+            auto full_sidecar = native_path;
+            full_sidecar += ".xmp";
+            std::error_code error;
+            const bool has_stem = std::filesystem::exists(stem_sidecar, error);
+            if (error) return nullptr;
+            const bool has_full = std::filesystem::exists(full_sidecar, error);
+            if (error) return nullptr;
+            std::string packet(scanned.xmp.begin(), scanned.xmp.end());
+            if (has_stem || has_full)
+            {
+                const auto sidecar = has_stem && has_full
+                    ? std::max(stem_sidecar, full_sidecar)
+                    : (has_stem ? stem_sidecar : full_sidecar);
+                std::ifstream input(sidecar, std::ios::binary | std::ios::ate);
+                if (!input) return nullptr;
+                const auto length = input.tellg();
+                if (length < 0 || length > 16 * 1024 * 1024) return nullptr;
+                packet.resize(static_cast<std::size_t>(length));
+                input.seekg(0);
+                if (!input.read(packet.data(), length)) return nullptr;
+            }
+            libfiles::xmp::meta xmp;
+            xmp.parse(packet);
+            auto properties = libfiles::properties_from_xmp(xmp);
+            if (properties.camera_make.empty()) properties.camera_make = scanned.camera_make;
+            if (properties.camera_model.empty()) properties.camera_model = scanned.camera_model;
+            result->properties = std::move(properties);
+        }
         for (const auto& keyword : result->properties.keywords)
         {
             if (!result->keywords.empty()) result->keywords += ", ";

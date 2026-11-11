@@ -1,7 +1,7 @@
 // This file is part of the Diffractor photo and video organizer.
 // Copyright 2026 Zac Walker
 // SPDX-License-Identifier: LGPL-2.1-or-later
-// Purpose: A headless Linux search worker using the existing collection index and a private cache.
+// Purpose: Headless Linux search and single-file rename workers using the existing collection index.
 
 #include "pch.h"
 #include "model.h"
@@ -152,5 +152,94 @@ int run_linux_index_query(const char* folder, const char* query)
     {
         std::fprintf(stderr, "Search worker failed: %s\n", e.what());
         return 3;
+    }
+}
+
+// Discover the original index's companion association before offering a rename. The run
+// rebuilds the plan and requires the exact reviewed companion names before moving anything.
+int run_linux_rename(const char* path_arg, const char* name_arg, const bool execute,
+                     const int expected_count, const char* const* expected)
+{
+    try
+    {
+        const df::file_path source{std::string_view(path_arg)};
+        const std::string_view name{name_arg};
+        if (!source.is_valid() || !source.exists() || !platform::is_valid_file_name(name))
+            throw std::runtime_error("The source or proposed name is invalid.");
+        const df::file_path destination(source.folder(), name, source.extension());
+        if (!destination.is_save_valid() || source.pack() == destination.pack())
+            throw std::runtime_error("The proposed name is invalid or unchanged.");
+
+        location_cache locations;
+        index_worker_async async(locations);
+        index_state index(async, locations);
+        // validate_folder performs the original companion association for this folder only;
+        // walking the whole subtree to rename one file would make large libraries unusable.
+        const auto node = index.validate_folder(source.folder(), true, platform::now());
+        if (node.enumeration_failed || node.deferred || !node.folder)
+            throw std::runtime_error("Cannot enumerate the complete source folder.");
+        const auto& files = node.folder->files;
+        auto found = std::ranges::find_if(files, [&](const auto& item)
+        {
+            return source.folder().combine_file(item.name).pack() == source.pack();
+        });
+        if (found == files.end()) throw std::runtime_error("The selected file is not in the folder index.");
+
+        const auto metadata = found->metadata.load();
+        std::vector<std::string> sidecars;
+        if (metadata)
+            for (const auto part : split(metadata->sidecars, true)) sidecars.emplace_back(part);
+        std::ranges::sort(sidecars);
+
+        // A shared companion cannot be moved without changing an unselected item's metadata.
+        for (const auto& other : files)
+        {
+            if (source.folder().combine_file(other.name).pack() == source.pack()) continue;
+            const auto other_metadata = other.metadata.load();
+            if (!other_metadata) continue;
+            for (const auto other_sidecar : split(other_metadata->sidecars, true))
+                if (std::ranges::find(sidecars, other_sidecar) != sidecars.end())
+                    throw std::runtime_error("A sidecar is shared with another file; rename is blocked.");
+        }
+        if (execute)
+        {
+            if (static_cast<size_t>(expected_count) != sidecars.size())
+                throw std::runtime_error("Sidecars changed after review; analyze again.");
+            for (size_t i = 0; i < sidecars.size(); ++i)
+                if (sidecars[i] != expected[i]) throw std::runtime_error("Sidecars changed after review; analyze again.");
+        }
+
+        std::vector<std::pair<df::file_path, df::file_path>> moves{{source, destination}};
+        std::set<std::string> targets{destination.pack()};
+        for (const auto& sidecar : sidecars)
+        {
+            const auto from = source.folder().combine_file(sidecar);
+            const auto to = source.folder().combine_file(name).extension(from.extension());
+            if (!targets.insert(to.pack()).second) throw std::runtime_error("Multiple files would use one destination.");
+            moves.emplace_back(from, to);
+        }
+        for (const auto& [from, to] : moves)
+        {
+            if (!from.exists()) throw std::runtime_error("A source file is unavailable.");
+            if (to.exists()) throw std::runtime_error("A destination already exists; nothing was renamed.");
+        }
+        if (!execute)
+        {
+            constexpr char header[] = "DIFREN1";
+            if (std::fwrite(header, 1, sizeof(header), stdout) != sizeof(header)) return 4;
+            for (const auto& [from, to] : moves)
+                for (const auto& path : {from.pack(), to.pack()})
+                    if (std::fwrite(path.data(), 1, path.size(), stdout) != path.size() || std::fputc(0, stdout) == EOF) return 4;
+            return std::fflush(stdout) == 0 ? 0 : 4;
+        }
+        df::item_element item(source, *found);
+        const auto result = item.rename(index, name);
+        if (result.failed()) throw std::runtime_error(result.format_error());
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        std::fprintf(stderr, "Rename failed: %s\n", e.what());
+        return 1;
     }
 }

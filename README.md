@@ -37,8 +37,9 @@ product target.
 The Linux requirements, native preview build commands, Arch packaging steps,
 known limits and phased parity plan are maintained in [docs/linux.md](docs/linux.md).
 The preview's user interface supports Korean and English; switch languages in
-the header without restarting the app. File deletion, metadata editing and
-other original Windows batch workflows are **not** claimed for the preview.
+the header without restarting the app. Reviewed photo metadata edits and
+single-file rename are experimental; file deletion and most original Windows
+batch workflows are not available. See the Linux support boundary for details.
 
 ## Building
 

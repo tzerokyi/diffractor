@@ -1,6 +1,8 @@
 mod browser_files;
 mod history;
 mod locale;
+mod rating;
+mod rename;
 mod selection;
 mod video;
 mod zoom;
@@ -16,10 +18,11 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
         Arc,
     },
+    time::{Duration, Instant},
 };
 
 use diffractor_core::{
@@ -46,6 +49,7 @@ enum Request {
     Image(u64, PathBuf),
     Metadata(u64, PathBuf),
     Compare(u64, PathBuf, PathBuf),
+    FullCompare(u64, PathBuf, PathBuf),
     FullImage(u64, PathBuf),
 }
 
@@ -62,11 +66,25 @@ enum Response {
         Result<(ColorImage, Option<Metadata>, bool, Option<egui::Vec2>), String>,
     ),
     Metadata(u64, PathBuf, Result<Metadata, String>),
-    Compare(u64, PathBuf, PathBuf, Result<(ColorImage, ColorImage), String>),
+    Compare(u64, PathBuf, PathBuf, Result<(ComparisonImage, ComparisonImage), String>),
+    FullCompare(u64, PathBuf, PathBuf, Result<(ColorImage, ColorImage), String>),
     Search(u64, PathBuf, Result<Vec<PathBuf>, String>),
     FullImage(u64, PathBuf, Result<ColorImage, String>),
     Playback(u64, Result<(i32, i64, i64), String>),
     Thumbnail(u64, PathBuf, Option<ColorImage>),
+    Rating(rating::ResultMessage),
+    RatingProgress(usize, usize),
+    Picker(u64, u64, u64, Option<PathBuf>),
+    Rename(rename::ResultMessage),
+}
+
+struct PickerRequest {
+    id: u64,
+    folder_generation: u64,
+    search_generation: u64,
+    initial: PathBuf,
+    folder: bool,
+    title: String,
 }
 
 struct ThumbnailRequest {
@@ -189,10 +207,55 @@ fn thumbnail(image: DecodedImage) -> ColorImage {
 struct Comparison {
     left: TextureHandle,
     right: TextureHandle,
+    left_source: egui::Vec2,
+    right_source: egui::Vec2,
+}
+
+struct ComparisonImage {
+    image: ColorImage,
+    source: egui::Vec2,
+}
+
+#[derive(Default)]
+struct BatchEdit {
+    items: Vec<(PathBuf, rating::Snapshot)>,
+    rating: Option<i32>,
+    set_title: bool,
+    title: String,
+    set_description: bool,
+    description: String,
+    add_tags: String,
+    remove_tags: String,
+}
+
+struct RenameDraft {
+    source: PathBuf,
+    name: String,
+    plan: Option<rename::Plan>,
+    error: Option<String>,
+}
+
+fn decode_comparison_image(path: &Path) -> Result<ComparisonImage, diffractor_core::DecodeError> {
+    let decoded = decode_image(path, (1200, 1000))?;
+    let fallback = if matches!(decoded.orientation, 5..=8) {
+        egui::vec2(decoded.height as f32, decoded.width as f32)
+    } else {
+        egui::vec2(decoded.width as f32, decoded.height as f32)
+    };
+    let source = probe_image(path).ok().map(|info| {
+        let (width, height) = if matches!(info.orientation, 5..=8) {
+            (info.height, info.width)
+        } else { (info.width, info.height) };
+        egui::vec2(width as f32, height as f32)
+    }).unwrap_or(fallback);
+    Ok(ComparisonImage { image: orient(decoded), source })
 }
 
 struct Browser {
     sender: Sender<Request>,
+    rating_sender: Sender<rating::Job>,
+    picker_sender: Sender<PickerRequest>,
+    rename_sender: Sender<rename::Job>,
     search_sender: Sender<SearchRequest>,
     playback_sender: Sender<PlaybackRequest>,
     thumbnail_sender: Sender<ThumbnailRequest>,
@@ -203,31 +266,59 @@ struct Browser {
     // This is the displayed media, NOT the complete selected batch target.
     selected: Option<PathBuf>,
     comparison: Option<Comparison>,
+    comparison_zoom: Zoom,
+    comparison_active_right: bool,
+    comparison_viewport: egui::Vec2,
+    comparison_wheel_remainder: f32,
+    comparison_full_requested: bool,
     selection: Selection,
     visible_media: Vec<PathBuf>,
     grid_view: bool,
     fullscreen: bool,
     show_details: bool,
+    slideshow: bool,
+    slide_deadline: Option<Instant>,
+    slide_seconds: u64,
     texture: Option<TextureHandle>,
     zoom: Zoom,
+    navigator_enabled: bool,
+    navigator_until: Option<Instant>,
+    navigator_last_rect: Option<egui::Rect>,
     source_extent: Option<egui::Vec2>,
     last_viewport: egui::Vec2,
     zoom_wheel_remainder: f32,
     full_image_requested: bool,
     metadata: Option<Metadata>,
+    rating_busy: bool,
+    picker_busy: bool,
+    picker_generation: u64,
+    rating_edit: Option<(PathBuf, Metadata, Metadata, rating::Snapshot, String, String)>,
+    batch_edit: Option<BatchEdit>,
+    batch_result: Option<(usize, Vec<(PathBuf, String)>, Vec<PathBuf>, Vec<PathBuf>)>,
+    batch_progress: Option<(usize, usize)>,
+    batch_cancel: Arc<AtomicBool>,
+    operation_error: Option<String>,
+    rename_busy: bool,
+    rename_draft: Option<RenameDraft>,
+    rename_result: Option<String>,
     status: Status,
     language: Locale,
     folder_generation: u64,
     folder_open_pending: bool,
+    refreshing_folder: bool,
     history: History,
     pending_travel: Travel,
     image_generation: u64,
     truncated: bool,
     search_text: String,
+    pending_search_query: String,
+    active_search_query: String,
     search_generation: u64,
     search_currency: Arc<AtomicU64>,
     search_active: bool,
     search_pending: bool,
+    search_dirty: bool,
+    search_preserve_display: bool,
     playback_generation: u64,
     playback_shared: Option<Arc<video::Shared>>,
     playback_state: i32,
@@ -274,6 +365,40 @@ impl Browser {
 
         let (sender, requests) = mpsc::channel();
         let (responses, receiver) = mpsc::channel();
+        let (rename_sender, rename_requests) = mpsc::channel::<rename::Job>();
+        let rename_responses = responses.clone();
+        let rename_context = cc.egui_ctx.clone();
+        std::thread::spawn(move || {
+            while let Ok(job) = rename_requests.recv() {
+                if rename_responses.send(Response::Rename(rename::run(job, &index_worker_path()))).is_err() { break; }
+                rename_context.request_repaint();
+            }
+        });
+        let (picker_sender, picker_requests) = mpsc::channel::<PickerRequest>();
+        let picker_responses = responses.clone();
+        let picker_context = cc.egui_ctx.clone();
+        std::thread::spawn(move || {
+            while let Ok(request) = picker_requests.recv() {
+                let dialog = rfd::FileDialog::new().set_title(&request.title).set_directory(request.initial);
+                let selected = if request.folder { dialog.pick_folder() } else { dialog.pick_file() };
+                if picker_responses.send(Response::Picker(request.id, request.folder_generation,
+                    request.search_generation, selected)).is_err() { break; }
+                picker_context.request_repaint();
+            }
+        });
+        let (rating_sender, rating_requests) = mpsc::channel();
+        let rating_responses = responses.clone();
+        let rating_context = cc.egui_ctx.clone();
+        std::thread::spawn(move || {
+            while let Ok(job) = rating_requests.recv() {
+                let result = rating::run_with_progress(job, &index_worker_path(), |done, total| {
+                    let _ = rating_responses.send(Response::RatingProgress(done, total));
+                    rating_context.request_repaint();
+                });
+                if rating_responses.send(Response::Rating(result)).is_err() { break; }
+                rating_context.request_repaint();
+            }
+        });
         let (thumbnail_sender, thumbnail_requests) = mpsc::channel::<ThumbnailRequest>();
         let thumbnail_currency = Arc::new(AtomicU64::new(0));
         let thumbnail_worker_currency = Arc::clone(&thumbnail_currency);
@@ -457,11 +582,18 @@ impl Browser {
                     Request::Compare(id, left, right) => {
                         // Both decoded pictures are bounded by their requested
                         // preview extent. Source images remain untouched.
-                        let result = decode_image(&left, (1200, 1000))
-                            .and_then(|first| decode_image(&right, (1200, 1000))
-                                .map(|second| (orient(first), orient(second))))
+                        let result = decode_comparison_image(&left)
+                            .and_then(|first| decode_comparison_image(&right)
+                                .map(|second| (first, second)))
                             .map_err(|error| format!("{error:?}"));
                         Response::Compare(id, left, right, result)
+                    }
+                    Request::FullCompare(id, left, right) => {
+                        let result = decode_image(&left, (0, 0))
+                            .and_then(|first| decode_image(&right, (0, 0))
+                                .map(|second| (orient(first), orient(second))))
+                            .map_err(|_| "Full-resolution comparison could not be loaded.".to_owned());
+                        Response::FullCompare(id, left, right, result)
                     }
                     Request::FullImage(id, path) => {
                         let result = decode_image(&path, (0, 0))
@@ -478,6 +610,9 @@ impl Browser {
         });
         let mut browser = Self {
             sender,
+            rating_sender,
+            picker_sender,
+            rename_sender,
             search_sender,
             playback_sender,
             thumbnail_sender,
@@ -487,31 +622,59 @@ impl Browser {
             entries: Vec::new(),
             selected: None,
             comparison: None,
+            comparison_zoom: Zoom::default(),
+            comparison_active_right: false,
+            comparison_viewport: egui::Vec2::ZERO,
+            comparison_wheel_remainder: 0.0,
+            comparison_full_requested: false,
             selection: Selection::default(),
             visible_media: Vec::new(),
             grid_view: true,
             fullscreen: false,
             show_details: true,
+            slideshow: false,
+            slide_deadline: None,
+            slide_seconds: 3,
             texture: None,
             zoom: Zoom::default(),
+            navigator_enabled: true,
+            navigator_until: None,
+            navigator_last_rect: None,
             source_extent: None,
             last_viewport: egui::Vec2::ZERO,
             zoom_wheel_remainder: 0.0,
             full_image_requested: false,
             metadata: None,
+            rating_busy: false,
+            picker_busy: false,
+            picker_generation: 0,
+            rating_edit: None,
+            batch_edit: None,
+            batch_result: None,
+            batch_progress: None,
+            batch_cancel: Arc::new(AtomicBool::new(false)),
+            operation_error: None,
+            rename_busy: false,
+            rename_draft: None,
+            rename_result: None,
             status: Status::Empty,
             language: Locale::detect(),
             folder_generation: 0,
             folder_open_pending: false,
+            refreshing_folder: false,
             history: History::default(),
             pending_travel: Travel::Push,
             image_generation: 0,
             truncated: false,
             search_text: String::new(),
+            pending_search_query: String::new(),
+            active_search_query: String::new(),
             search_generation: 0,
             search_currency,
             search_active: false,
             search_pending: false,
+            search_dirty: false,
+            search_preserve_display: false,
             playback_generation: 0,
             playback_shared: None,
             playback_state: 0,
@@ -543,6 +706,33 @@ impl Browser {
         self.begin_open(path, false);
     }
 
+    fn choose_path(&mut self, folder: bool) {
+        if self.picker_busy || self.folder_open_pending { return; }
+        self.picker_generation += 1;
+        self.picker_busy = true;
+        let request = PickerRequest {
+            id: self.picker_generation,
+            folder_generation: self.folder_generation,
+            search_generation: self.search_generation,
+            initial: self.folder.clone(),
+            folder,
+            title: tr(self.language, if folder { Text::OpenFolder } else { Text::OpenFile }).into(),
+        };
+        if self.picker_sender.send(request).is_err() {
+            self.picker_busy = false;
+            self.status = Status::Error("File chooser is unavailable.".into());
+        }
+    }
+
+    fn start_rename(&mut self) {
+        if self.rename_busy || self.rating_busy || self.rating_edit.is_some() || self.batch_edit.is_some()
+            || self.folder_open_pending || self.selection.len() != 1 { return; }
+        let Some(source) = self.selection.single().map(Path::to_path_buf) else { return; };
+        if self.slideshow { self.stop_slideshow(); }
+        let name = source.file_stem().and_then(|part| part.to_str()).unwrap_or("").to_owned();
+        self.rename_draft = Some(RenameDraft { source, name, plan: None, error: None });
+    }
+
     fn open_path(&mut self, path: PathBuf) {
         self.begin_open(path, true);
     }
@@ -567,6 +757,9 @@ impl Browser {
         // A failed or refused path must never destroy the current browser state.
         // Only a successful Folder response commits the replacement view.
         self.folder_generation += 1;
+        self.slideshow = false;
+        self.slide_deadline = None;
+        self.refreshing_folder = false;
         self.folder_open_pending = true;
         self.pending_travel = travel;
         self.search_generation += 1;
@@ -582,6 +775,18 @@ impl Browser {
         if self.sender.send(request).is_err() {
             self.folder_open_pending = false;
             self.status = Status::Error("Folder worker is unavailable.".into());
+        }
+    }
+
+    fn refresh(&mut self) {
+        if self.folder_open_pending || self.folder.as_os_str().is_empty() {
+            return;
+        }
+        if self.search_active {
+            self.search_query(self.active_search_query.clone());
+        } else {
+            self.open_folder(self.folder.clone());
+            self.refreshing_folder = self.folder_open_pending;
         }
     }
 
@@ -617,26 +822,55 @@ impl Browser {
     }
 
     fn search(&mut self) {
+        self.search_query(self.search_text.clone());
+    }
+
+    // A completed metadata write can change the membership of the current
+    // query. If a query is already running, repeat its exact submitted text
+    // after it finishes rather than publishing a potentially stale result.
+    fn metadata_changed(&mut self, path: &Path) {
+        if path.starts_with(&self.folder) && (self.search_active || self.search_pending) {
+            self.search_dirty = true;
+            self.refresh_dirty_search();
+        }
+    }
+
+    fn refresh_dirty_search(&mut self) {
+        if !self.search_dirty || self.search_pending || self.folder_open_pending { return; }
+        if self.search_active {
+            self.search_dirty = false;
+            self.search_query(self.active_search_query.clone());
+            self.search_preserve_display = true;
+        }
+    }
+
+    fn search_query(&mut self, query: String) {
         if self.folder_open_pending
             || self.folder.as_os_str().is_empty()
-            || self.search_text.trim().is_empty() {
+            || query.trim().is_empty() {
             return;
         }
         self.search_generation += 1;
+        self.search_preserve_display = false;
+        self.slideshow = false;
+        self.slide_deadline = None;
         self.search_currency
             .store(self.search_generation, Ordering::Release);
         self.search_pending = true;
+        self.pending_search_query = query.clone();
         self.status = Status::Text(Text::Indexing);
         let _ = self.search_sender.send(SearchRequest {
             id: self.search_generation,
             folder: self.folder.clone(),
-            query: self.search_text.clone(),
+            query,
         });
     }
 
     // Focus/selection are source-owned state, not inferred from rendered
     // thumbnails. Keyboard arrows reuse the same grammar as mouse selection.
     fn step_media(&mut self, direction: isize, extend: bool) {
+        self.slideshow = false;
+        self.slide_deadline = None;
         self.selection
             .move_focus(&self.visible_media, direction < 0, extend);
         self.present_selection();
@@ -646,6 +880,8 @@ impl Browser {
         if self.folder_open_pending {
             return;
         }
+        self.slideshow = false;
+        self.slide_deadline = None;
         self.selection.apply(&self.visible_media, &path, intent);
         self.present_selection();
     }
@@ -676,6 +912,10 @@ impl Browser {
             self.source_extent = None;
         }
         if let Some((left, right)) = pair {
+            self.comparison_zoom.fit();
+            self.comparison_active_right = false;
+            self.comparison_wheel_remainder = 0.0;
+            self.comparison_full_requested = false;
             self.status = Status::Text(Text::LoadingCompare);
             let _ = self.sender.send(Request::Compare(self.image_generation, left, right));
         } else if self.selection.len() > 1 {
@@ -700,7 +940,10 @@ impl Browser {
             return;
         }
         self.stop_playback();
+        self.slide_deadline = None;
         self.zoom.fit();
+        self.navigator_until = None;
+        self.navigator_last_rect = None;
         self.zoom_wheel_remainder = 0.0;
         self.source_extent = None;
         self.full_image_requested = false;
@@ -751,6 +994,8 @@ impl Browser {
             || matches!(self.playback_state, 1 | 2) {
             return;
         }
+        self.slideshow = false;
+        self.slide_deadline = None;
         if matches!(self.playback_state, 3 | 4) {
             let _ = self.playback_sender.send(PlaybackRequest::Pause(
                 self.playback_generation,
@@ -761,11 +1006,76 @@ impl Browser {
         }
     }
 
+    fn toggle_slideshow(&mut self, ctx: &egui::Context) {
+        if self.slideshow {
+            self.stop_slideshow();
+            return;
+        }
+        if self.folder_open_pending || self.visible_media.is_empty() {
+            return;
+        }
+        self.slideshow = true;
+        self.slide_deadline = None;
+        if self.selected.is_none() {
+            let start = self.selection.focus()
+                .filter(|path| self.visible_media.iter().any(|item| item == *path))
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.visible_media[0].clone());
+            self.selection.apply(&self.visible_media, &start, Intent::Replace);
+            self.present_selection();
+        } else if self.selected.as_ref().is_some_and(|path| is_image(path)) && self.texture.is_some() {
+            self.slide_deadline = Some(Instant::now() + Duration::from_secs(self.slide_seconds));
+        } else if self.selected.as_ref().is_some_and(|path| is_video(path) || is_audio(path)) {
+            if self.playback_state == 4 {
+                let _ = self.playback_sender.send(PlaybackRequest::Pause(self.playback_generation, false));
+            } else if matches!(self.playback_state, 6 | 7) {
+                self.start_playback(ctx);
+            }
+        }
+        self.tick_slideshow(ctx);
+    }
+
+    fn stop_slideshow(&mut self) {
+        self.slideshow = false;
+        self.slide_deadline = None;
+        if self.playback_state == 3 {
+            let _ = self.playback_sender.send(PlaybackRequest::Pause(self.playback_generation, true));
+        }
+    }
+
+    fn tick_slideshow(&mut self, ctx: &egui::Context) {
+        if !self.slideshow || self.folder_open_pending { return; }
+        let Some(path) = self.selected.clone() else { self.stop_slideshow(); return; };
+        let advance = if is_image(&path) {
+            if let Some(deadline) = self.slide_deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if !remaining.is_zero() { ctx.request_repaint_after(remaining); }
+                remaining.is_zero()
+            } else { false }
+        } else if is_audio(&path) || is_video(&path) {
+            if self.playback_state == 0 { self.start_playback(ctx); }
+            if self.playback_state == 7 { self.stop_slideshow(); return; }
+            self.playback_state == 6
+        } else { self.stop_slideshow(); return; };
+        if advance {
+            let next = self.visible_media.iter().position(|item| item == &path)
+                .and_then(|index| self.visible_media.get(index + 1)).cloned();
+            if let Some(next) = next {
+                self.selection.apply(&self.visible_media, &next, Intent::Replace);
+                self.present_selection();
+                ctx.request_repaint();
+            } else {
+                self.stop_slideshow();
+            }
+        }
+    }
+
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(response) = self.receiver.try_recv() {
             match response {
                 Response::Folder(id, path, result, selected) if id == self.folder_generation => {
                     self.folder_open_pending = false;
+                    let refreshing = std::mem::take(&mut self.refreshing_folder);
                     match result {
                         Ok((entries, truncated)) => {
                             let previous = if self.folder.as_os_str().is_empty() {
@@ -787,12 +1097,15 @@ impl Browser {
                             self.clear_thumbnails();
                             self.image_generation += 1;
                             self.selected = None;
-                            self.selection.clear();
+                            if !refreshing {
+                                self.selection.clear();
+                            }
                             self.comparison = None;
                             self.texture = None;
                             self.metadata = None;
                             self.video_aspect = None;
                             self.search_active = false;
+                            self.search_dirty = false;
                             self.folder = path;
                             self.address = self.folder.to_string_lossy().into_owned();
                             self.entries = entries;
@@ -800,6 +1113,9 @@ impl Browser {
                                 .filter(|entry| !entry.directory)
                                 .map(|entry| entry.path.clone())
                                 .collect();
+                            if refreshing {
+                                self.selection.retain_visible(&self.visible_media);
+                            }
                             self.truncated = truncated;
                             self.status = Status::Text(if self.entries.is_empty() {
                                 Text::EmptyFolder
@@ -815,6 +1131,8 @@ impl Browser {
                             if let Some(path) = restore {
                                 self.selection.set_direct(path.clone());
                                 self.open_image(path);
+                            } else if refreshing && self.selection.len() > 0 {
+                                self.present_selection();
                             }
                             #[cfg(feature = "visual-audit")]
                             if let Some(query) = self.audit_query.take() {
@@ -825,7 +1143,10 @@ impl Browser {
                                 self.open_image(path);
                             }
                         }
-                        Err(error) => self.status = Status::Error(error),
+                        Err(error) => {
+                            self.status = Status::Error(error);
+                            self.refresh_dirty_search();
+                        },
                     }
                 }
                 Response::Image(id, path, result)
@@ -848,13 +1169,25 @@ impl Browser {
                                 image,
                                 egui::TextureOptions::LINEAR,
                             ));
+                            #[cfg(feature = "visual-audit")]
+                            if !video && std::env::var_os("DIFFRACTOR_AUDIT_ZOOM").is_some() {
+                                self.zoom.actual_pixels(self.source_extent.unwrap_or(egui::Vec2::ONE),
+                                    self.last_viewport.max(egui::Vec2::ONE));
+                            }
+                            if self.slideshow && !video {
+                                self.slide_deadline = Some(Instant::now() + Duration::from_secs(self.slide_seconds));
+                                ctx.request_repaint_after(Duration::from_secs(self.slide_seconds));
+                            }
                             self.status = Status::Image { width: size[0], height: size[1], video, full: false };
                             #[cfg(feature = "visual-audit")]
                             if video && self.audit_autoplay {
                                 self.start_playback(ctx);
                             }
                         }
-                        Err(error) => self.status = Status::Error(error),
+                        Err(error) => {
+                            if self.slideshow { self.stop_slideshow(); }
+                            self.status = Status::Error(error);
+                        },
                     }
                 }
                 Response::Compare(id, left, right, result)
@@ -866,10 +1199,29 @@ impl Browser {
                     match result {
                         Ok((first, second)) => {
                             self.comparison = Some(Comparison {
-                                left: ctx.load_texture("compare-left", first, egui::TextureOptions::LINEAR),
-                                right: ctx.load_texture("compare-right", second, egui::TextureOptions::LINEAR),
+                                left: ctx.load_texture("compare-left", first.image, egui::TextureOptions::LINEAR),
+                                right: ctx.load_texture("compare-right", second.image, egui::TextureOptions::LINEAR),
+                                left_source: first.source,
+                                right_source: second.source,
                             });
                             self.status = Status::Text(Text::Comparing);
+                        }
+                        Err(error) => self.status = Status::Error(error),
+                    }
+                }
+                Response::FullCompare(id, left, right, result)
+                    if id == self.image_generation && !self.folder_open_pending =>
+                {
+                    if self.comparison_pair().as_ref() != Some(&(left, right)) { continue; }
+                    match result {
+                        Ok((first, second)) => {
+                            let max_side = ctx.input(|input| input.max_texture_side);
+                            if first.size.iter().chain(second.size.iter()).any(|side| *side > max_side) {
+                                self.status = Status::Text(Text::FullImageTooLarge);
+                            } else if let Some(compare) = &mut self.comparison {
+                                compare.left.set(first, egui::TextureOptions::LINEAR);
+                                compare.right.set(second, egui::TextureOptions::LINEAR);
+                            }
                         }
                         Err(error) => self.status = Status::Error(error),
                     }
@@ -878,6 +1230,107 @@ impl Browser {
                     if id == self.image_generation && self.selected.as_ref() == Some(&path) =>
                 {
                     self.metadata = result.ok();
+                }
+                Response::Rating(message) => {
+                    self.rating_busy = false;
+                    match message {
+                        rating::ResultMessage::Prepared(path, Ok((metadata, snapshot))) => {
+                            self.rating_edit = Some((path, metadata.clone(), metadata, snapshot, String::new(), String::new()));
+                        }
+                        rating::ResultMessage::Prepared(_, Err(error)) => self.status = Status::Error(error),
+                        rating::ResultMessage::Saved(path, Ok(metadata)) => {
+                            let reloaded = metadata.is_some();
+                            if self.selected.as_ref() == Some(&path) { self.metadata = metadata; }
+                            self.status = if reloaded { Status::RatingSaved(path.to_string_lossy().into_owned()) }
+                                else { Status::Error(format!("{}: {}", tr(self.language, Text::ReloadFailed), path.display())) };
+                            if !reloaded {
+                                self.operation_error = Some(format!("{}: {}", tr(self.language, Text::ReloadFailed), path.display()));
+                            }
+                            self.metadata_changed(&path);
+                        }
+                        rating::ResultMessage::Saved(path, Err(error)) => {
+                            let message = format!("{}: {error}", path.display());
+                            self.status = Status::Error(message.clone());
+                            self.operation_error = Some(message);
+                            // A failed in-place write can still have changed bytes.
+                            self.metadata_changed(&path);
+                        }
+                        rating::ResultMessage::BatchPrepared(Ok(items)) => {
+                            self.batch_edit = Some(BatchEdit { items, ..Default::default() });
+                            self.status = Status::Empty;
+                        }
+                        rating::ResultMessage::BatchPrepared(Err(error)) => self.status = Status::Error(error),
+                        rating::ResultMessage::BatchSaved { updated, failures, cancelled } => {
+                            self.batch_progress = None;
+                            let succeeded = updated.len();
+                            let mut reload_failed = Vec::new();
+                            let mut search_affected = false;
+                            search_affected |= failures.iter().any(|(path, _)| path.starts_with(&self.folder));
+                            for (path, metadata) in updated {
+                                if metadata.is_none() { reload_failed.push(path.clone()); }
+                                search_affected |= path.starts_with(&self.folder);
+                                if self.selected.as_ref() == Some(&path) { self.metadata = metadata; }
+                            }
+                            self.batch_result = Some((succeeded, failures, reload_failed, cancelled));
+                            self.status = Status::Text(Text::BatchResult);
+                            if search_affected && (self.search_active || self.search_pending) {
+                                self.search_dirty = true;
+                                self.refresh_dirty_search();
+                            }
+                        }
+                    }
+                }
+                Response::RatingProgress(done, total) => {
+                    if self.batch_progress.is_some() { self.batch_progress = Some((done, total)); }
+                }
+                Response::Picker(id, folder_generation, search_generation, selected)
+                    if id == self.picker_generation => {
+                    self.picker_busy = false;
+                    if folder_generation == self.folder_generation && search_generation == self.search_generation
+                        && !self.folder_open_pending {
+                        if let Some(path) = selected { self.open_path(path); }
+                    }
+                }
+                Response::Rename(message) => {
+                    self.rename_busy = false;
+                    match message {
+                        rename::ResultMessage::Analyzed(source, name, result) => {
+                            if let Some(draft) = &mut self.rename_draft {
+                                if draft.source == source && draft.name == name {
+                                    match result {
+                                        Ok(plan) => { draft.plan = Some(plan); draft.error = None; }
+                                        Err(error) => { draft.plan = None; draft.error = Some(error); }
+                                    }
+                                }
+                            }
+                        }
+                        rename::ResultMessage::Finished(source, destination, result) => {
+                            match result {
+                                Ok(()) => {
+                                    self.rename_result = Some(format!("{} → {}", source.display(), destination.display()));
+                                    if !self.folder_open_pending && self.search_active && source.starts_with(&self.folder) {
+                                        if self.selected.as_ref() == Some(&source) {
+                                            for entry in &mut self.entries { if entry.path == source { entry.path = destination.clone(); } }
+                                            for path in &mut self.visible_media { if *path == source { *path = destination.clone(); } }
+                                            self.selection.set_direct(destination.clone());
+                                            self.open_image(destination.clone());
+                                        }
+                                        self.metadata_changed(&source);
+                                    } else if !self.folder_open_pending && source.parent() == Some(self.folder.as_path()) {
+                                        if self.selected.as_ref() == Some(&source) { self.open_path(destination); }
+                                        else { self.refresh(); }
+                                    }
+                                }
+                                Err(error) => {
+                                    self.rename_result = Some(format!("{}: {error}", source.display()));
+                                    if self.search_active { self.metadata_changed(&source); }
+                                    else if !self.folder_open_pending && source.parent() == Some(self.folder.as_path()) {
+                                        self.refresh();
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 Response::FullImage(id, path, result)
                     if id == self.image_generation && self.selected.as_ref() == Some(&path) =>
@@ -907,15 +1360,18 @@ impl Browser {
                     if id == self.search_generation && folder == self.folder =>
                 {
                     self.search_pending = false;
+                    if self.search_dirty {
+                        self.search_dirty = false;
+                        self.search_query(self.pending_search_query.clone());
+                        self.search_preserve_display = true;
+                        continue;
+                    }
                     match result {
                         Ok(paths) => {
-                            self.stop_playback();
+                            let same_query = self.search_active && self.active_search_query == self.pending_search_query;
+                            let old_selection_count = self.selection.len();
+                            self.active_search_query.clone_from(&self.pending_search_query);
                             self.clear_thumbnails();
-                            self.image_generation += 1;
-                            self.selected = None;
-                            self.comparison = None;
-                            self.texture = None;
-                            self.metadata = None;
                             self.entries = paths
                                 .into_iter()
                                 .map(|path| Entry {
@@ -926,10 +1382,21 @@ impl Browser {
                             self.visible_media = self.entries.iter()
                                 .map(|entry| entry.path.clone()).collect();
                             self.selection.retain_visible(&self.visible_media);
+                            let preserve_display = self.search_preserve_display && same_query && old_selection_count > 0
+                                && old_selection_count == self.selection.len()
+                                && (self.selected.is_some() || self.comparison.is_some());
+                            if !preserve_display {
+                                self.stop_playback();
+                                self.image_generation += 1;
+                                self.selected = None;
+                                self.comparison = None;
+                                self.texture = None;
+                                self.metadata = None;
+                            }
                             self.search_active = true;
                             self.truncated = false;
                             self.status = Status::Matches(self.entries.len());
-                            if self.selection.len() != 0 {
+                            if !preserve_display && self.selection.len() != 0 {
                                 self.present_selection();
                             }
                             #[cfg(feature = "visual-audit")]
@@ -961,6 +1428,8 @@ impl Browser {
                     Err(error) => {
                         self.playback_shared = None;
                         self.playback_state = 0;
+                        self.slideshow = false;
+                        self.slide_deadline = None;
                         self.status = Status::Error(error);
                     }
                 },
@@ -995,6 +1464,7 @@ impl Browser {
 
 impl Drop for Browser {
     fn drop(&mut self) {
+        self.batch_cancel.store(true, Ordering::Release);
         self.search_currency.store(u64::MAX, Ordering::Release);
         self.thumbnail_currency.store(u64::MAX, Ordering::Release);
         let _ = self.playback_sender.send(PlaybackRequest::Stop);
@@ -1005,13 +1475,26 @@ impl eframe::App for Browser {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
         self.receive(&ctx);
+        self.tick_slideshow(&ctx);
+        let dropped = ctx.input(|input| input.raw.dropped_files.clone());
+        if !dropped.is_empty() {
+            if dropped.len() == 1 {
+                self.open_path(dropped[0].path().to_path_buf());
+            } else {
+                self.status = Status::Text(Text::DropOne);
+            }
+        }
         // Escape leaves magnification first, then fullscreen; it never
         // unexpectedly closes the native window or drops file selection.
         if !ctx.egui_wants_keyboard_input() {
-            if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
+            if ctx.input(|input| input.key_pressed(egui::Key::F5)) {
+                self.refresh();
+            } else if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
                 self.toggle_fullscreen(&ctx);
             } else if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                if self.selected.is_some() && self.source_extent.is_some()
+                if self.slideshow {
+                    self.stop_slideshow();
+                } else if self.selected.is_some() && self.source_extent.is_some()
                     && self.zoom.is_magnified(
                         self.source_extent.unwrap_or(egui::Vec2::ONE),
                         self.last_viewport,
@@ -1025,7 +1508,13 @@ impl eframe::App for Browser {
         // Mirror the original Windows command grammar without intercepting
         // path, search or other active editors.
         if !ctx.egui_wants_keyboard_input() {
-            if ctx.input(|input| input.key_pressed(egui::Key::Enter))
+            if ctx.input(|input| input.key_pressed(egui::Key::F2)) {
+                self.start_rename();
+            } else if ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::O)) {
+                self.choose_path(false);
+            } else if ctx.input(|input| input.modifiers.shift && !input.modifiers.ctrl && !input.modifiers.alt && input.key_pressed(egui::Key::Space)) {
+                self.toggle_slideshow(&ctx);
+            } else if ctx.input(|input| input.key_pressed(egui::Key::Enter))
                 && self.selected.is_some() && !self.fullscreen {
                 self.toggle_fullscreen(&ctx);
             } else if ctx.input(|input| input.key_pressed(egui::Key::K)) {
@@ -1077,6 +1566,8 @@ impl eframe::App for Browser {
                 self.step_media(-1, extend);
             }
         }
+        let mut prepare_rating = false;
+        let mut prepare_batch = false;
         if !self.fullscreen {
         egui::Panel::top("header").show(root, |ui| {
             ui.horizontal(|ui| {
@@ -1113,6 +1604,19 @@ impl eframe::App for Browser {
                     if let Some(parent) = parent {
                         self.open_folder(parent);
                     }
+                }
+                if ui.add_enabled(!self.folder_open_pending && !self.folder.as_os_str().is_empty(),
+                    egui::Button::new("⟳"))
+                    .on_hover_text(tr(self.language, Text::Refresh)).clicked() {
+                    self.refresh();
+                }
+                if ui.add_enabled(!self.picker_busy && !self.folder_open_pending,
+                    egui::Button::new(tr(self.language, Text::OpenFile))).clicked() {
+                    self.choose_path(false);
+                }
+                if ui.add_enabled(!self.picker_busy && !self.folder_open_pending,
+                    egui::Button::new(tr(self.language, Text::OpenFolder))).clicked() {
+                    self.choose_path(true);
                 }
                 let edit = ui.add_sized(
                     [(ui.available_width() - 65.0).max(100.0), 28.0],
@@ -1383,7 +1887,13 @@ impl eframe::App for Browser {
                         });
                     }
                     ui.add_space(12.0);
-                    ui.label(RichText::new(tr(self.language, Text::BatchUnavailable)).weak());
+                    if images == self.selection.len() {
+                        if ui.add_enabled(!self.rating_busy && !self.rename_busy && self.rename_draft.is_none(), egui::Button::new(tr(self.language, Text::BatchEdit))).clicked() {
+                            prepare_batch = true;
+                        }
+                    } else {
+                        ui.label(RichText::new(tr(self.language, Text::BatchUnavailable)).weak());
+                    }
                 });
         } else if self.show_details && self.metadata.is_some() {
             let metadata = self.metadata.as_ref().expect("checked metadata presence");
@@ -1425,6 +1935,10 @@ impl eframe::App for Browser {
                                 format!("{rating} / 5")
                             });
                         }
+                        if self.selected.as_ref().is_some_and(|path| is_image(path))
+                            && ui.add_enabled(!self.rating_busy && !self.rename_busy && self.rename_draft.is_none(), egui::Button::new(tr(self.language, Text::EditRating))).clicked() {
+                            prepare_rating = true;
+                        }
                     });
                 });
         } else if self.show_details && self.texture.is_some() {
@@ -1436,6 +1950,29 @@ impl eframe::App for Browser {
                 });
         }
         } // Keep native Items panels hidden while displaying the same media fullscreen.
+        if prepare_rating {
+            if let Some(path) = self.selected.clone() {
+                if self.slideshow { self.stop_slideshow(); }
+                self.rating_busy = true;
+                self.status = Status::Text(Text::OpeningMedia);
+                if self.rating_sender.send(rating::Job::Prepare(path)).is_err() {
+                    self.rating_busy = false;
+                    self.status = Status::Error("Metadata worker is unavailable.".into());
+                }
+            }
+        }
+        if prepare_batch {
+            if self.slideshow { self.stop_slideshow(); }
+            let paths: Vec<_> = self.visible_media.iter().filter(|path| self.selection.contains(path)).cloned().collect();
+            if paths.len() == self.selection.len() && !paths.is_empty() {
+                self.rating_busy = true;
+                self.status = Status::Text(Text::OpeningMedia);
+                if self.rating_sender.send(rating::Job::PrepareBatch(paths)).is_err() {
+                    self.rating_busy = false;
+                    self.status = Status::Error("Metadata worker is unavailable.".into());
+                }
+            }
+        }
         if let Some(frame) = self
             .playback_shared
             .as_ref()
@@ -1458,6 +1995,14 @@ impl eframe::App for Browser {
             }
         }
         egui::CentralPanel::default().show(root, |ui| {
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!self.visible_media.is_empty() && !self.folder_open_pending,
+                    egui::Button::new(tr(self.language, if self.slideshow { Text::StopSlideshow } else { Text::Slideshow }))).clicked() {
+                    self.toggle_slideshow(&ctx);
+                }
+                ui.add_enabled(!self.slideshow, egui::DragValue::new(&mut self.slide_seconds).range(1..=30).suffix(" s"))
+                    .on_hover_text(tr(self.language, Text::SlideDelay));
+            });
             if self.fullscreen && ui.button(tr(self.language, Text::ExitFullscreen)).clicked() {
                 self.toggle_fullscreen(&ctx);
             }
@@ -1470,6 +2015,9 @@ impl eframe::App for Browser {
                     }
                     if ui.button("›").on_hover_text(tr(self.language, Text::Next)).clicked() {
                         self.step_media(1, false);
+                    }
+                    if ui.add_enabled(!self.rename_busy && !self.rating_busy && self.rating_edit.is_none() && self.batch_edit.is_none(), egui::Button::new(tr(self.language, Text::Rename))).clicked() {
+                        self.start_rename();
                     }
                     ui.label(RichText::new(file_name).strong().size(17.0));
                 });
@@ -1506,6 +2054,8 @@ impl eframe::App for Browser {
                         self.toggle_playback(&ctx);
                     }
                     if self.playback_shared.is_some() && ui.button(tr(self.language, Text::Stop)).clicked() {
+                        self.slideshow = false;
+                        self.slide_deadline = None;
                         self.stop_playback();
                         self.status = Status::Text(Text::Stopped);
                     }
@@ -1548,12 +2098,34 @@ impl eframe::App for Browser {
                     if ui.button(tr(self.language, Text::Fit)).clicked() {
                         self.zoom.fit();
                     }
+                    ui.toggle_value(&mut self.navigator_enabled, "▣")
+                        .on_hover_text(tr(self.language, Text::Navigator));
                     ui.label(format!("{:.0}%", self.zoom.scale(source, viewport) * 100.0));
                     ui.label(
                         RichText::new(tr(self.language, Text::ZoomHelp))
                             .small()
                             .color(Color32::GRAY),
                     );
+                });
+            }
+            if let Some(compare) = &self.comparison {
+                let source = if self.comparison_active_right { compare.right_source } else { compare.left_source };
+                let viewport = self.comparison_viewport.max(egui::Vec2::ONE);
+                ui.horizontal(|ui| {
+                    if ui.button("−").on_hover_text(tr(self.language, Text::ZoomOut)).clicked() {
+                        self.comparison_zoom.step(-1, source, viewport, viewport * 0.5);
+                    }
+                    if ui.button("+").on_hover_text(tr(self.language, Text::ZoomIn)).clicked() {
+                        self.comparison_zoom.step(1, source, viewport, viewport * 0.5);
+                    }
+                    if ui.button("1:1").on_hover_text(tr(self.language, Text::ActualPixels)).clicked() {
+                        self.comparison_zoom.actual_pixels(source, viewport);
+                    }
+                    if ui.button(tr(self.language, Text::Fit)).clicked() {
+                        self.comparison_zoom.fit();
+                    }
+                    ui.label(format!("{:.0}%", self.comparison_zoom.scale(source, viewport) * 100.0));
+                    ui.label(RichText::new(tr(self.language, Text::ZoomHelp)).small().color(Color32::GRAY));
                 });
             }
             ui.add_space(12.0);
@@ -1567,14 +2139,40 @@ impl eframe::App for Browser {
                 let right_rect = egui::Rect::from_min_size(
                     egui::pos2(viewport.min.x + pane_width + gap, viewport.min.y),
                     egui::vec2(pane_width, viewport.height()));
-                for (texture, bounds) in [(&compare.left, left_rect), (&compare.right, right_rect)] {
-                    let size = texture.size_vec2();
-                    if size.x <= 0.0 || size.y <= 0.0 {
+                self.comparison_viewport = left_rect.size();
+                let mut needs_full = false;
+                for (right, texture, source, bounds) in [
+                    (false, &compare.left, compare.left_source, left_rect),
+                    (true, &compare.right, compare.right_source, right_rect),
+                ] {
+                    if source.x <= 0.0 || source.y <= 0.0 || bounds.is_negative() {
                         continue;
                     }
-                    let scale = (bounds.width() / size.x).min(bounds.height() / size.y).max(0.0);
-                    let rect = egui::Rect::from_center_size(bounds.center(), size * scale);
-                    ui.painter_at(viewport).image(
+                    let response = ui.interact(bounds, ui.scope_id().with(("compare", right)), egui::Sense::click_and_drag());
+                    if response.clicked() || response.dragged() || response.hovered() {
+                        self.comparison_active_right = right;
+                    }
+                    if response.hovered() {
+                        let (scroll, control, pointer) = ui.input(|i| (i.smooth_scroll_delta.y, i.modifiers.ctrl, i.pointer.hover_pos()));
+                        if control {
+                            self.comparison_wheel_remainder = (self.comparison_wheel_remainder + scroll).clamp(-960.0, 960.0);
+                            let anchor = pointer.unwrap_or(bounds.center()) - bounds.min;
+                            let mut steps = 0;
+                            while self.comparison_wheel_remainder.abs() >= 60.0 && steps < 6 {
+                                let direction = if self.comparison_wheel_remainder > 0.0 { 1 } else { -1 };
+                                self.comparison_zoom.step(direction, source, bounds.size(), anchor);
+                                self.comparison_wheel_remainder -= direction as f32 * 60.0;
+                                steps += 1;
+                            }
+                        } else { self.comparison_wheel_remainder = 0.0; }
+                    }
+                    if response.dragged() {
+                        self.comparison_zoom.pan_by(response.drag_delta(), source, bounds.size());
+                    }
+                    let rect = self.comparison_zoom.rect(bounds, source);
+                    let size = texture.size_vec2();
+                    needs_full |= rect.width() > size.x * 1.15 || rect.height() > size.y * 1.15;
+                    ui.painter_at(bounds).image(
                         texture.id(),
                         rect,
                         egui::Rect::from_min_max(
@@ -1582,6 +2180,12 @@ impl eframe::App for Browser {
                         ),
                         Color32::WHITE,
                     );
+                }
+                if needs_full && !self.comparison_full_requested && !self.folder_open_pending {
+                    if let Some((left, right)) = self.comparison_pair() {
+                        self.comparison_full_requested = true;
+                        let _ = self.sender.send(Request::FullCompare(self.image_generation, left, right));
+                    }
                 }
             } else if let Some(texture) = self.texture.clone() {
                 let available = ui.available_size();
@@ -1612,6 +2216,20 @@ impl eframe::App for Browser {
                     );
                     let source = self.source_extent.unwrap_or_else(|| texture.size_vec2());
                     self.last_viewport = viewport.size();
+                    let initial_rect = self.zoom.rect(viewport, source);
+                    if self.navigator_last_rect != Some(initial_rect)
+                        || (response.hovered() && ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO)) {
+                        self.navigator_until = Some(Instant::now() + Duration::from_secs(3));
+                    }
+                    let nav_scale = (160.0 / source.x).min(160.0 / source.y)
+                        .min((viewport.width() - 16.0).max(0.0) / source.x)
+                        .min((viewport.height() - 16.0).max(0.0) / source.y);
+                    let nav_bounds = egui::Rect::from_min_size(viewport.min + egui::vec2(8.0, 8.0), source * nav_scale);
+                    let show_navigator = self.navigator_enabled && nav_scale > 0.0
+                        && self.zoom.is_magnified(source, viewport.size())
+                        && self.navigator_until.is_some_and(|until| until > Instant::now());
+                    let nav_response = show_navigator.then(|| ui.interact(
+                        nav_bounds, ui.scope_id().with("zoom_navigator"), egui::Sense::click_and_drag()));
                     if response.hovered() {
                         let (scroll, control, pointer) = ui.input(|i| {
                             (i.smooth_scroll_delta.y, i.modifiers.ctrl, i.pointer.hover_pos())
@@ -1633,8 +2251,18 @@ impl eframe::App for Browser {
                             self.zoom_wheel_remainder = 0.0;
                         }
                     }
-                    if response.dragged() {
+                    if response.dragged() && !nav_response.as_ref().is_some_and(|nav| nav.dragged()
+                        || nav.contains_pointer()) {
                         self.zoom.pan_by(response.drag_delta(), source, viewport.size());
+                    }
+                    if let Some(nav) = &nav_response {
+                        if nav.hovered() || nav.dragged() {
+                            self.navigator_until = Some(Instant::now() + Duration::from_secs(3));
+                        }
+                        if (nav.clicked() || nav.dragged()) && nav.interact_pointer_pos().is_some() {
+                            let point = nav.interact_pointer_pos().unwrap();
+                            self.zoom.set_center((point - nav_bounds.min) / nav_bounds.size(), source, viewport.size());
+                        }
                     }
                     let rect = self.zoom.rect(viewport, source);
                     ui.painter_at(viewport).image(
@@ -1643,6 +2271,22 @@ impl eframe::App for Browser {
                         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
+                    self.navigator_last_rect = Some(rect);
+                    if show_navigator {
+                        let painter = ui.painter_at(viewport);
+                        painter.rect_filled(nav_bounds.expand(2.0), 2.0, Color32::from_black_alpha(220));
+                        painter.image(texture.id(), nav_bounds,
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
+                        let visible = rect.intersect(viewport);
+                        let start = (visible.min - rect.min) / rect.size();
+                        let end = (visible.max - rect.min) / rect.size();
+                        let marker = egui::Rect::from_min_max(nav_bounds.min + start * nav_bounds.size(),
+                            nav_bounds.min + end * nav_bounds.size());
+                        painter.rect_stroke(marker, 0.0, egui::Stroke::new(2.0, Color32::WHITE), egui::StrokeKind::Inside);
+                        if let Some(until) = self.navigator_until {
+                            ctx.request_repaint_after(until.saturating_duration_since(Instant::now()));
+                        }
+                    }
                     // Source-space scale is invariant when a thumbnail/preview is
                     // replaced by a better texture. Decode full pixels only when
                     // the visible rectangle outgrows the current decoded raster.
@@ -1678,6 +2322,215 @@ impl eframe::App for Browser {
                 });
             }
         });
+        if let Some(mut draft) = self.rename_draft.take() {
+            let mut action = None;
+            egui::Window::new(tr(self.language, Text::Rename)).collapsible(false).resizable(true).show(&ctx, |ui| {
+                ui.label(draft.source.to_string_lossy());
+                ui.label(tr(self.language, Text::RenameName));
+                if ui.text_edit_singleline(&mut draft.name).changed() {
+                    draft.plan = None;
+                    draft.error = None;
+                }
+                if ui.add_enabled(!self.rename_busy && !draft.name.is_empty(), egui::Button::new(tr(self.language, Text::RenameAnalyze))).clicked() {
+                    action = Some(1);
+                }
+                if let Some(error) = &draft.error { ui.colored_label(Color32::LIGHT_RED, error); }
+                if let Some(plan) = &draft.plan {
+                    ui.label(tr(self.language, Text::RenameReview));
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        for (from, to) in &plan.moves {
+                            ui.label(format!("{} → {}", from.display(), to.display()));
+                        }
+                    });
+                }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!self.rename_busy && draft.plan.is_some(), egui::Button::new(tr(self.language, Text::RenameRun))).clicked() {
+                        action = Some(2);
+                    }
+                    if ui.button(tr(self.language, Text::Cancel)).clicked() { action = Some(3); }
+                });
+            });
+            match action {
+                Some(1) => {
+                    draft.plan = None;
+                    draft.error = None;
+                    self.rename_busy = true;
+                    if self.rename_sender.send(rename::Job::Analyze(draft.source.clone(), draft.name.clone())).is_err() {
+                        self.rename_busy = false;
+                        draft.error = Some("Rename worker is unavailable.".into());
+                    }
+                    self.rename_draft = Some(draft);
+                }
+                Some(2) => {
+                    if let Some(plan) = draft.plan.take() {
+                        self.rename_busy = true;
+                        if self.rename_sender.send(rename::Job::Run(plan)).is_err() {
+                            self.rename_busy = false;
+                            self.rename_result = Some("Rename worker is unavailable.".into());
+                        }
+                    }
+                }
+                Some(3) => {},
+                _ => self.rename_draft = Some(draft),
+            }
+        }
+        if let Some(message) = self.rename_result.take() {
+            let mut close = false;
+            egui::Window::new(tr(self.language, Text::RenameResult)).collapsible(false).show(&ctx, |ui| {
+                ui.label(&message);
+                if ui.button(tr(self.language, Text::Done)).clicked() { close = true; }
+            });
+            if !close { self.rename_result = Some(message); }
+        }
+        if let Some(message) = self.operation_error.take() {
+            let mut close = false;
+            egui::Window::new(tr(self.language, Text::OperationResult)).collapsible(false).show(&ctx, |ui| {
+                ui.label(&message);
+                if ui.button(tr(self.language, Text::Done)).clicked() { close = true; }
+            });
+            if !close { self.operation_error = Some(message); }
+        }
+        if let Some(mut draft) = self.batch_edit.take() {
+            let mut action = None;
+            egui::Window::new(tr(self.language, Text::BatchEdit))
+                .collapsible(false).resizable(true).show(&ctx, |ui| {
+                    ui.label(tr(self.language, Text::BatchReview));
+                    ui.label(format!("{} {}", draft.items.len(), tr(self.language, Text::SelectedCount)));
+                    egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+                        for (path, _) in &draft.items { ui.label(path.to_string_lossy()); }
+                    });
+                    ui.label(tr(self.language, Text::RatingEffect));
+                    ui.checkbox(&mut draft.set_title, tr(self.language, Text::BatchSetTitle));
+                    ui.add_enabled(draft.set_title, egui::TextEdit::singleline(&mut draft.title));
+                    ui.checkbox(&mut draft.set_description, tr(self.language, Text::BatchSetDescription));
+                    ui.add_enabled(draft.set_description, egui::TextEdit::multiline(&mut draft.description).desired_rows(2));
+                    if draft.set_title || draft.set_description {
+                        ui.label(egui::RichText::new(tr(self.language, Text::BatchEmptyClears)).weak());
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(&mut draft.rating, None, tr(self.language, Text::BatchNoRating));
+                        for value in -1..=5 {
+                            let label = if value < 0 { tr(self.language, Text::Rejected).to_owned() } else { value.to_string() };
+                            ui.selectable_value(&mut draft.rating, Some(value), label);
+                        }
+                    });
+                    ui.label(tr(self.language, Text::AddTags));
+                    ui.add(egui::TextEdit::multiline(&mut draft.add_tags).desired_rows(2));
+                    ui.label(tr(self.language, Text::RemoveTags));
+                    ui.add(egui::TextEdit::multiline(&mut draft.remove_tags).desired_rows(2));
+                    ui.horizontal(|ui| {
+                        let has_changes = draft.set_title || draft.set_description || draft.rating.is_some()
+                            || !draft.add_tags.trim().is_empty() || !draft.remove_tags.trim().is_empty();
+                        if ui.add_enabled(has_changes, egui::Button::new(tr(self.language, Text::RatingSave))).clicked() { action = Some(true); }
+                        if ui.button(tr(self.language, Text::Cancel)).clicked() { action = Some(false); }
+                    });
+                });
+            match action {
+                Some(true) => {
+                    let edits = rating::Edits {
+                        rating: draft.rating,
+                        title: draft.set_title.then_some(draft.title),
+                        description: draft.set_description.then_some(draft.description),
+                        add_tags: draft.add_tags.lines().map(str::trim).filter(|tag| !tag.is_empty()).map(str::to_owned).collect(),
+                        remove_tags: draft.remove_tags.lines().map(str::trim).filter(|tag| !tag.is_empty()).map(str::to_owned).collect(),
+                        ..Default::default()
+                    };
+                    self.rating_busy = true;
+                    self.batch_cancel.store(false, Ordering::Release);
+                    self.batch_progress = Some((0, draft.items.len()));
+                    self.status = Status::Text(Text::RatingSaving);
+                    if self.rating_sender.send(rating::Job::SaveBatch(draft.items, edits, Arc::clone(&self.batch_cancel))).is_err() {
+                        self.rating_busy = false;
+                        self.batch_progress = None;
+                        self.status = Status::Error("Metadata worker is unavailable.".into());
+                    }
+                }
+                Some(false) => self.status = Status::Empty,
+                None => self.batch_edit = Some(draft),
+            }
+        }
+        if let Some((done, total)) = self.batch_progress {
+            egui::Window::new(tr(self.language, Text::RatingSaving)).collapsible(false).resizable(false).show(&ctx, |ui| {
+                ui.label(format!("{done} / {total}"));
+                ui.add(egui::ProgressBar::new(if total == 0 { 0.0 } else { done as f32 / total as f32 }));
+                if self.batch_cancel.load(Ordering::Acquire) {
+                    ui.label(tr(self.language, Text::BatchCancelling));
+                } else if ui.button(tr(self.language, Text::Cancel)).clicked() {
+                    self.batch_cancel.store(true, Ordering::Release);
+                }
+            });
+        }
+        if let Some((succeeded, failures, reload_failed, cancelled)) = self.batch_result.take() {
+            let mut close = false;
+            egui::Window::new(tr(self.language, Text::BatchResult)).collapsible(false).show(&ctx, |ui| {
+                ui.label(format!("{}: {succeeded}", tr(self.language, Text::BatchSucceeded)));
+                ui.label(format!("{}: {}", tr(self.language, Text::BatchFailed), failures.len()));
+                ui.label(format!("{}: {}", tr(self.language, Text::BatchCancelled), cancelled.len()));
+                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                    for (path, error) in &failures { ui.label(format!("{}: {error}", path.display())); }
+                    for path in &reload_failed { ui.label(format!("{}: {}", tr(self.language, Text::ReloadFailed), path.display())); }
+                    for path in &cancelled { ui.label(format!("{}: {}", tr(self.language, Text::BatchCancelled), path.display())); }
+                });
+                if ui.button(tr(self.language, Text::Done)).clicked() { close = true; }
+            });
+            if !close { self.batch_result = Some((succeeded, failures, reload_failed, cancelled)); }
+        }
+        if let Some((path, original, mut edited, snapshot, mut add_tags, mut remove_tags)) = self.rating_edit.take() {
+            let mut action = None;
+            egui::Window::new(tr(self.language, Text::EditRating))
+                .collapsible(false).resizable(false).show(&ctx, |ui| {
+                    ui.label(tr(self.language, Text::RatingReview));
+                    ui.label(path.to_string_lossy());
+                    ui.label(tr(self.language, Text::RatingEffect));
+                    ui.label(tr(self.language, Text::Title));
+                    ui.text_edit_singleline(&mut edited.title);
+                    ui.label(tr(self.language, Text::Description));
+                    ui.add(egui::TextEdit::multiline(&mut edited.description).desired_rows(2));
+                    ui.label(format!("{}: {}", tr(self.language, Text::Keywords), original.keywords));
+                    ui.label(tr(self.language, Text::AddTags));
+                    ui.add(egui::TextEdit::multiline(&mut add_tags).desired_rows(2));
+                    ui.label(tr(self.language, Text::RemoveTags));
+                    ui.add(egui::TextEdit::multiline(&mut remove_tags).desired_rows(2));
+                    ui.label(tr(self.language, Text::Rating));
+                    ui.horizontal_wrapped(|ui| {
+                        for rating in -1..=5 {
+                            let label = if rating < 0 { tr(self.language, Text::Rejected).to_owned() }
+                                else { rating.to_string() };
+                            if ui.selectable_label(edited.rating.unwrap_or(0) == rating, label).clicked() {
+                                edited.rating = Some(rating);
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(self.language, Text::RatingSave)).clicked() { action = Some(true); }
+                        if ui.button(tr(self.language, Text::Cancel)).clicked() { action = Some(false); }
+                    });
+                });
+            match action {
+                Some(true) => {
+                    let changes = rating::Edits {
+                        title: (edited.title != original.title).then_some(edited.title),
+                        description: (edited.description != original.description).then_some(edited.description),
+                        rating: (edited.rating != original.rating).then_some(edited.rating).flatten(),
+                        add_tags: add_tags.lines().map(str::trim).filter(|tag| !tag.is_empty()).map(str::to_owned).collect(),
+                        remove_tags: remove_tags.lines().map(str::trim).filter(|tag| !tag.is_empty()).map(str::to_owned).collect(),
+                    };
+                    if changes.title.is_none() && changes.description.is_none() && changes.rating.is_none()
+                        && changes.add_tags.is_empty() && changes.remove_tags.is_empty() {
+                        self.status = Status::Empty;
+                        return;
+                    }
+                    self.rating_busy = true;
+                    self.status = Status::Text(Text::RatingSaving);
+                    if self.rating_sender.send(rating::Job::Save(path, changes, snapshot)).is_err() {
+                        self.rating_busy = false;
+                        self.status = Status::Error("Metadata worker is unavailable.".into());
+                    }
+                }
+                Some(false) => self.status = Status::Empty,
+                None => self.rating_edit = Some((path, original, edited, snapshot, add_tags, remove_tags)),
+            }
+        }
         #[cfg(feature = "visual-audit")]
         if self.texture.is_some()
             && self.thumbnail_pending.is_empty()

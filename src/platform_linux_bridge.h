@@ -36,7 +36,7 @@ void diffractor_image_free(diffractor_decoded_image* image);
 
 typedef struct diffractor_metadata diffractor_metadata;
 
-// Read embedded EXIF, IPTC and XMP on a worker. Strings are UTF-8 and borrowed until free.
+// Read media metadata and conventional RAW XMP sidecars on a worker. Strings are borrowed until free.
 // Field IDs: 0 title, 1 camera make, 2 camera model, 3 description, 4 keywords, 5 lens.
 diffractor_metadata* diffractor_metadata_read(const char* path);
 const char* diffractor_metadata_text(const diffractor_metadata* metadata, int field);

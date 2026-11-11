@@ -140,6 +140,12 @@ impl Zoom {
         );
     }
 
+    pub fn set_center(&mut self, center: Vec2, source: Vec2, viewport: Vec2) {
+        if source.x <= 0.0 || source.y <= 0.0 { return; }
+        self.center = self.clamped_center_for(center.clamp(Vec2::ZERO, Vec2::splat(1.0)),
+            source, viewport, self.scale(source, viewport));
+    }
+
     fn clamped_center_for(&self, desired: Vec2, source: Vec2, viewport: Vec2, scale: f32) -> Vec2 {
         Self { mode: self.mode, center: desired }
             .clamped_center(source, viewport, scale)
@@ -202,6 +208,37 @@ mod tests {
         let rect = z.rect(bounds, SOURCE);
         assert!((rect.max.x - VIEW.x).abs() < 0.01);
         assert!((rect.max.y - VIEW.y).abs() < 0.01);
+    }
+
+    #[test]
+    fn navigator_center_is_clamped_to_visible_source_edges() {
+        let mut z = Zoom::default();
+        z.actual_pixels(SOURCE, VIEW);
+        z.set_center(Vec2::ZERO, SOURCE, VIEW);
+        let bounds = Rect::from_min_size(Pos2::ZERO, VIEW);
+        let rect = z.rect(bounds, SOURCE);
+        assert!(rect.min.x.abs() < 0.01 && rect.min.y.abs() < 0.01);
+        z.set_center(Vec2::splat(1.0), SOURCE, VIEW);
+        let rect = z.rect(bounds, SOURCE);
+        assert!((rect.max.x - VIEW.x).abs() < 0.01);
+        assert!((rect.max.y - VIEW.y).abs() < 0.01);
+    }
+
+    #[test]
+    fn comparison_uses_one_scale_and_normalized_center_for_different_sources() {
+        let mut zoom = Zoom::default();
+        let left = Vec2::new(6000.0, 4000.0);
+        let right = Vec2::new(3000.0, 2000.0);
+        let pane = Vec2::new(500.0, 400.0);
+        let bounds = Rect::from_min_size(Pos2::ZERO, pane);
+        zoom.actual_pixels(left, pane);
+        zoom.set_center(Vec2::new(0.3, 0.6), left, pane);
+        let normalized_center = |source| {
+            let rect = zoom.rect(bounds, source);
+            (bounds.center() - rect.min) / rect.size()
+        };
+        assert!((normalized_center(left) - normalized_center(right)).length() < 0.0001);
+        assert_eq!(zoom.scale(left, pane), zoom.scale(right, pane));
     }
 
     #[test]
