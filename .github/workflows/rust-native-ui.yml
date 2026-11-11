@@ -5,7 +5,12 @@ name: Rust Native UI
 
 on:
   push:
-    branches: [arch-linux-build]
+    branches: [master, arch-linux-build]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-native-ui.yml'
+  pull_request:
+    branches: [master]
     paths:
       - 'rust/**'
       - '.github/workflows/rust-native-ui.yml'
