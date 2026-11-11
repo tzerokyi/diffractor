@@ -276,13 +276,13 @@ both the Rust UI and C++ index: explicitly identify the authoritative owner.
 
 | Windows source/contract | Rust owner | Current migration evidence |
 | --- | --- | --- |
-| Items folder/media list, focus and multi-select (Design: Selection) | `rust/diffractor-ui/src/main.rs` and `selection.rs` | SOURCE: row and virtualized grid/list selection, plain/Ctrl/Shift/Ctrl+Shift, Ctrl+A, summary read-only; directories still navigate rather than enter a batch selection |
+| Items folder/media list, focus and multi-select (Design: Selection) | `rust/diffractor-ui/src/main.rs`, `view.rs` and `selection.rs` | SOURCE: row and virtualized grid/list selection, plain/Ctrl/Shift/Ctrl+Shift, Ctrl+A, summary read-only; directories still navigate rather than enter a batch selection |
 | Navigation and history (Design: Navigation) | `history.rs`, Rust folder worker | SOURCE: bounded Back/Forward, commit after successful enumeration; query and selection restoration incomplete |
-| Image view and zoom (Zoom) | `zoom.rs`, `main.rs`, C++ libfiles decode bridge | SOURCE: original 19-stop ladder, exact source 1:1, source-based anchor/center/pan, planar navigator and linked comparison zoom; progressive tiles remain |
+| Image view and zoom (Zoom) | `zoom.rs`, `view.rs`, `main.rs`, C++ libfiles decode bridge | SOURCE: original 19-stop ladder, exact source 1:1, source-based anchor/center/pan, planar navigator and linked comparison zoom; progressive tiles remain |
 | Original media index and query parser | `diffractor-core`, `platform_linux_index.cpp` | Existing worker, folder-scoped recursive search, local SQLite cache; managed multi-root collections missing |
 | Metadata/sidecars/edit/ratings | `diffractor-core`, `rating.rs`, Linux worker and future Rust task views | Embedded and conventional RAW XMP metadata read; reviewed single- and multi-photo title/description/rating/tag changes use `files::update`; other sidecar associations and edits not connected |
 | Audio/video playback | `video.rs` and original FFmpeg preview | CPU-copy libVLC playback + timeline; native video feature parity/hardware acceleration incomplete |
-| Fullscreen, comparison, import/sync and batch file operations | Rust `main.rs` native view and future task modules | SOURCE: F11 fullscreen, Esc zoom-before-exit, two-photo source-ordered comparison with decoded frames; import/sync/batch file writes still not ported |
+| Fullscreen, comparison, import/sync and batch file operations | Rust `view.rs` native view and future task modules | SOURCE: F11 fullscreen, Esc zoom-before-exit, two-photo source-ordered comparison with decoded frames; import/sync/batch file writes still not ported |
 | Localization and original visual identity | `locale.rs` and native style components | Typed Korean/English tokens, graphite theme; original iconography/geometry and broader language coverage incomplete |
 
 ### Functional phases
@@ -372,9 +372,9 @@ Preserve original semantics unless a user-approved difference is documented.
 
 ### Current source checkpoint / verification integrity
 
-- Development branch: `arch-linux-build`, Draft
-  [PR #1](https://github.com/tzerokyi/diffractor/pull/1). The Windows
-  `master` C++ app remains intact.
+- The `arch-linux-build` work was merged into `master` through
+  [PR #1](https://github.com/tzerokyi/diffractor/pull/1) on 2026-11-11.
+  The original Windows C++ application remains intact.
 - Read-only media selection uses a source-derived Rust `Selection` state
   (focus, anchor, selected file targets) and handles plain/Ctrl/Shift/Ctrl+Shift,
   keyboard ranges and Ctrl+A. Selection summary counts media types without
@@ -418,6 +418,23 @@ LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 LD_LIBRARY_PATH="$PWD/tmp/linux-build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   cargo run --manifest-path rust/diffractor-ui/Cargo.toml --locked -- "$HOME/Pictures"
 ```
+
+### 2026-11-12 native frontend structural boundary
+
+- Source refactor: keep `Browser` state, worker channels and result coordination in
+  `rust/diffractor-ui/src/main.rs`; move the unchanged `eframe::App` view implementation
+  to `rust/diffractor-ui/src/view.rs`. This is an ownership/file boundary,
+  not yet an independent renderer or a component design overhaul.
+- Scope invariant: selection and file-operation targets remain owned by `Browser` and
+  its existing workers. No UI control, keyboard behavior, user-visible color or
+  media transaction was intentionally changed in this slice.
+- Verification gates: exact source-block extraction was checked before commit;
+  Rust type-check and linked test results must be collected from CI. Arch/KDE
+  interaction and Windows visual parity remain separate, unverified gates.
+- Next structural work: split the monolithic view by navigation, browser items,
+  media presentation and reviewed-action dialogs; then separate generation-gated
+  worker event handling from the browser state controller. Avoid spawning a second
+  state owner or duplicating command decisions across UI modules.
 
 For feedback of reusable scope, update
 [SKILLS rustify](https://github.com/tzerokyi/SKILLS/blob/main/skills/rustify/SKILL.md)
